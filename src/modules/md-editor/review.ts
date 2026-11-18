@@ -1,7 +1,7 @@
 /**
  * The review column: as in Word's review mode, a column down the right of the document (a
- * quarter of the editor's width) where every highlight, addition and deletion with a thread
- * shows as a grey box, at all times, in Visual and in Raw. Boxes scroll with the text.
+ * quarter of the editor's width) where every highlight, addition and deletion with notes, and
+ * every anchored comment, shows as a grey box, at all times, in Visual and in Raw. Boxes scroll with the text.
  *
  * Each box is tied to its text by a dotted line: along the bottom of the text's last line, out to
  * 15px short of the column (where it would turn), then across into the middle of the box's left
@@ -17,12 +17,12 @@ import { NxTextField, h } from '../widgets';
 import { noteList } from './notes';
 import type { Mark, MarkKind } from './parse';
 
-export const KIND_TITLE: Record<MarkKind, string> = { highlight: 'Highlight', strike: 'Deletion', underline: 'Addition' };
+export const KIND_TITLE: Record<MarkKind, string> = { highlight: 'Highlight', strike: 'Deletion', underline: 'Addition', comment: 'Comment' };
 
 /** Identifies a mark across edits: by its first attribution, or (without one) by its text. */
 function markKey(md: string, m: Mark): string {
   const n = m.notes[0];
-  return n ? `${m.kind}|${n.author}|${n.time ?? ''}|${n.comment ?? ''}` : `${m.kind}||${md.slice(m.body, m.to - 2)}`;
+  return n ? `${m.kind}|${n.author}|${n.stamp ?? ''}|${n.comment ?? ''}` : `${m.kind}||${md.slice(m.body, m.end)}`;
 }
 
 /**
@@ -67,6 +67,10 @@ export interface ReviewHost {
   enabled(): boolean;
   /** Adds the user's `text` to the thread of the mark with `key`; returns the mark's key after. */
   comment(key: string, text: string): string | null;
+  /** Changes note `index` of the mark with `key` to say `text`; returns the mark's key after (null if it went). */
+  edit(key: string, index: number, text: string): string | null;
+  /** Whether comment fields check spelling. */
+  spellcheck(): boolean;
 }
 
 /** How far short of the column a line turns. */
@@ -109,6 +113,8 @@ export class Review {
   private readonly items = new Map<string, Item>();
   /** The box with the comment field open. */
   private active: { key: string; field: NxTextField } | null = null;
+  /** The note being edited, in the open box. */
+  private editing: { key: string; index: number; field: NxTextField } | null = null;
   /** Each mark's key, by its index (as of the last layout). */
   private keyAt: string[] = [];
   /** The mark whose text the pointer is over: its line is lit. */
@@ -283,7 +289,16 @@ export class Review {
     link.lastElementChild!.setAttribute('r', String(BUMP));
     const item: Item = { key, el, body, link, shown: '' };
     el.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || !this.host.user || this.active?.key === item.key) return;
+      if (e.button !== 0 || !this.host.user) return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (this.active?.key === item.key) {
+        // In the open box, a note (anyone's) is edited where it is.
+        const note = t?.closest('.md-note');
+        if (!note || t?.closest('.nx-textfield')) return;
+        e.preventDefault();
+        this.editNote(item, Array.from(item.body.querySelectorAll('.md-note')).indexOf(note));
+        return;
+      }
       e.preventDefault();
       this.open(item);
     });
@@ -297,7 +312,9 @@ export class Review {
 
   /** Shows the mark's kind and thread in its box (when they changed). */
   private fill(item: Item, m: Mark, color: string | null): void {
-    const sig = JSON.stringify([m.kind, color, m.verdict, m.notes.map((n) => [n.author, n.time, n.comment])]);
+    // Not while one of its notes is being edited (that would take the field away).
+    if (this.editing?.key === item.key) return;
+    const sig = JSON.stringify([m.kind, color, m.verdict, m.notes.map((n) => [n.author, n.stamp, n.comment])]);
     if (sig === item.shown) return;
     item.shown = sig;
     if (color) item.el.style.setProperty('--md-change', color);
@@ -315,8 +332,8 @@ export class Review {
     const user = this.host.user;
     if (!user) return;
     this.close();
-    const field = new NxTextField({ onCommit: (text) => this.send(text) });
-    field.input.addEventListener('keydown', (e) => {
+    const field = new NxTextField({ lines: 2, spellcheck: this.host.spellcheck(), onCommit: (text) => this.send(text) });
+    (field.input as HTMLElement).addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -337,6 +354,7 @@ export class Review {
   }
 
   private close(): void {
+    this.stopEditing();
     const a = this.active;
     if (!a) return;
     this.active = null;
@@ -359,18 +377,76 @@ export class Review {
     if (!a || !text.trim()) return;
     const next = this.host.comment(a.key, text);
     a.field.value = '';
-    // The mark's key changes when its author first comments on it: the box (field and all) goes with it.
-    if (next && next !== a.key) {
-      const item = this.items.get(a.key);
-      this.items.delete(a.key);
-      if (item) {
-        item.key = next;
-        this.items.set(next, item);
-      }
-      if (this.pointed === a.key) this.pointed = next;
-      a.key = next;
-    }
+    this.rekey(a.key, next);
     a.field.focus();
+    this.schedule();
+  }
+
+  /**
+   * The mark's key changed (its first note did, when its author first comments on it, or a
+   * note of it was edited): the box (field and all) goes with it. Null: the mark went.
+   */
+  private rekey(from: string, to: string | null): void {
+    if (to === from) return;
+    if (to === null) return this.close();
+    const item = this.items.get(from);
+    this.items.delete(from);
+    if (item) {
+      item.key = to;
+      this.items.set(to, item);
+    }
+    if (this.pointed === from) this.pointed = to;
+    if (this.active?.key === from) this.active.key = to;
+  }
+
+  /** Edits note `index` of the open box's mark in a field where its comment was. */
+  private editNote(item: Item, index: number): void {
+    const { md, marks } = this.host.marks();
+    const n = marks[markKeys(md, marks).indexOf(item.key)]?.notes[index];
+    const el = item.body.querySelectorAll('.md-note')[index];
+    if (!n || !el) return;
+    this.stopEditing();
+    const field = new NxTextField({
+      value: n.comment ?? '',
+      lines: 2,
+      spellcheck: this.host.spellcheck(),
+      placeholder: index ? 'Reply' : 'Comment',
+      onCommit: (text) => this.saveNote(text),
+    });
+    (field.input as HTMLElement).addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      this.stopEditing();
+      this.active?.field.focus();
+    });
+    el.querySelector('.md-note-text')?.remove();
+    el.classList.add('editing');
+    el.append(field.el);
+    this.editing = { key: item.key, index, field };
+    field.input.focus();
+    field.input.setSelectionRange(field.value.length, field.value.length);
+    this.layout();
+  }
+
+  /** Saves the note being edited as `text` (emptied, a reply goes). */
+  private saveNote(text: string): void {
+    const e = this.editing;
+    if (!e) return;
+    this.editing = null;
+    const item = this.items.get(e.key);
+    if (item) item.shown = '';
+    this.rekey(e.key, this.host.edit(e.key, e.index, text));
+    this.active?.field.focus();
+    this.schedule();
+  }
+
+  /** Stops editing a note, unchanged. */
+  private stopEditing(): void {
+    const e = this.editing;
+    if (!e) return;
+    this.editing = null;
+    const item = this.items.get(e.key);
+    if (item) item.shown = '';
     this.schedule();
   }
 

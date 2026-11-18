@@ -400,7 +400,7 @@ function log(msg: string): void {
     const field = note.el;
     field.style.width = '220px';
     pop.setContent(field, row);
-    note.input.addEventListener('keydown', (e) => e.key === 'Enter' && done(true));
+    (note.input as HTMLElement).addEventListener('keydown', (e) => e.key === 'Enter' && done(true));
     const hover = new NxPopover({ title: 'Hover card', passive: true, content: 'Passive popovers let the mouse through.' });
     const hoverTarget = new NxButton({ label: 'Hover me' });
     hoverTarget.el.addEventListener('mouseenter', () => hover.showAt(hoverTarget.el.getBoundingClientRect()));

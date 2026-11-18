@@ -45,26 +45,33 @@ const hasContent = (s: string) => /\S/.test(s);
 /** Visible text: anything besides whitespace and sentinels. */
 const hasText = (s: string) => /[^\s-]/.test(s);
 
-/**
- * Wraps `inner` in delimiter `d`, keeping edge whitespace outside so the pair still parses.
- * A mark (^^ ~~ ++) keeps it inside where it can: marks may close after a space, and open
- * before one when notes (attribution source text, just inside the opening delimiter) come
- * first — so a tracked change keeps the spaces it added or deleted. A wrapper with no text
- * left is dropped, notes and all.
- */
-function wrap(d: string, inner: string, notes?: string): string {
-  // An attributed change may be nothing but a space (one typed or deleted).
-  if (!hasText(inner) && !(notes && /[^\S\n]/.test(inner))) return inner;
+/** Wraps `inner` in delimiter `d`, keeping edge whitespace outside so the pair still parses. */
+function wrap(d: string, inner: string): string {
+  if (!hasText(inner)) return inner;
   const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(inner)!;
-  if (notes === undefined) return `${lead}${d}${core}${d}${trail}`;
-  // Spaces stay inside; line breaks (such as a trailing <br>) go outside.
-  const cutLead = notes ? lead.lastIndexOf('\n') + 1 : lead.length;
-  const cutTrail = trail.includes('\n') ? trail.indexOf('\n') : trail.length;
-  return `${lead.slice(0, cutLead)}${d}${notes}${lead.slice(cutLead)}${core}${trail.slice(0, cutTrail)}${d}${trail.slice(cutTrail)}`;
+  return `${lead}${d}${core}${d}${trail}`;
 }
 
-/** The attributions an element carries from the renderer (see parse.ts). */
+/**
+ * A review mark (`d` is `++`, `--` or `==`): `{d` + text + `d}`, then its notes. Spaces stay
+ * inside, so a tracked change keeps the spaces it added or deleted; line breaks (such as a
+ * trailing <br>) go outside, and a line break inside makes a mark of each line. A mark with no
+ * text (bar a space, with notes) is dropped, notes and all.
+ */
+function markup(d: string, inner: string, notes: string): string {
+  return inner
+    .split('\n')
+    .map((l) => (hasText(l) || (notes && /[^\S\n]/.test(l)) ? `{${d}${l}${d}}${notes}` : l))
+    .join('\n');
+}
+
+/** Each mark element's delimiter. */
+const MARK_DELIMS: Record<string, string> = { U: '++', INS: '++', DEL: '--', S: '--', STRIKE: '--', MARK: '==' };
+
+/** The notes an element carries from the renderer (see parse.ts). */
 const notesOf = (el: Element) => (el instanceof HTMLElement ? el.dataset.notes ?? '' : '');
+/** An anchored comment's element: its notes are all of it. */
+const isAnchor = (el: Element) => el.classList.contains('md-anchor');
 
 class Converter {
   private readonly marks = new Map<Node, { offset: number; ch: string }[]>();
@@ -204,7 +211,10 @@ class Converter {
   private node(n: Node): string {
     if (n instanceof Text) return this.text(n);
     if (!(n instanceof Element)) return '';
+    if (isAnchor(n)) return notesOf(n) + this.inline(this.kids(n));
     const inner = () => this.inline(this.kids(n));
+    const d = MARK_DELIMS[n.tagName];
+    if (d) return markup(d, inner(), notesOf(n));
     switch (n.tagName) {
       case 'BR':
         return '\n';
@@ -214,15 +224,6 @@ class Converter {
       case 'EM':
       case 'I':
         return wrap('*', inner());
-      case 'U':
-      case 'INS':
-        return wrap('++', inner(), notesOf(n));
-      case 'DEL':
-      case 'S':
-      case 'STRIKE':
-        return wrap('~~', inner(), notesOf(n));
-      case 'MARK':
-        return wrap('^^', inner(), notesOf(n));
       case 'CODE':
         return wrap('`', this.code(n).replace(/\n/g, ' '));
       case 'A': {
@@ -238,7 +239,10 @@ class Converter {
     }
   }
 
-  /** Literal text of a code element; <br> and line <div>s become newlines. */
+  /**
+   * Literal text of a code element; <br> and line <div>s become newlines. Review marks with
+   * notes, and anchored comments, are written as they are anywhere (one mark per line).
+   */
   private code(el: Node): string {
     let s = '';
     for (const c of this.kids(el)) {
@@ -251,8 +255,13 @@ class Converter {
           if (s && !s.endsWith('\n')) s += '\n';
           s += this.code(c);
           if (!s.endsWith('\n')) s += '\n';
+        } else if (isAnchor(c)) {
+          s += notesOf(c) + this.code(c);
         } else {
-          s += this.code(c);
+          const d = MARK_DELIMS[c.tagName];
+          const notes = notesOf(c);
+          // In code a mark needs its notes: without, it is just code.
+          s += d && notes ? markup(d, this.code(c), notes) : this.code(c);
         }
       }
     }

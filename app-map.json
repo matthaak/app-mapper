@@ -5,6 +5,7 @@
     {"file":"dev-fs-api.md","x":-176,"y":560,"parent":"project-files.md"},
     {"file":"mapper.md","x":-304,"y":176,"parent":"README.md"},
     {"file":"markdown-conventions.md","x":-240,"y":368,"parent":"mapper.md"},
+    {"file":"md-editor-app.md","x":640,"y":288,"parent":"md-editor.md"},
     {"file":"md-editor.md","x":416,"y":176,"parent":"README.md"},
     {"file":"project-files.md","x":-240,"y":464,"parent":"mapper.md"},
     {"file":"README.md","x":-16,"y":-32,"parent":null},

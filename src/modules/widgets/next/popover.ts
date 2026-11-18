@@ -1,5 +1,5 @@
 import { h } from '../widget';
-import { NxWidget, toNode, type Content } from './base';
+import { NxWidget, startDrag, toNode, type Content } from './base';
 
 export interface NxPopoverOptions {
   /** Shown in a black strip across the top (none if empty). */
@@ -9,6 +9,8 @@ export interface NxPopoverOptions {
   passive?: boolean;
   /** Makes it a small modal panel: a mouse-down outside it or Escape closes it and calls this. */
   onDismiss?: () => void;
+  /** It can be dragged by its title (once moved, it stays where it was put). */
+  movable?: boolean;
 }
 
 /** A box in viewport coordinates, such as a DOMRect. */
@@ -40,6 +42,15 @@ export class NxPopover extends NxWidget<HTMLDivElement> {
     this.title = o.title ?? '';
     if (o.content !== undefined) this.body.append(toNode(o.content));
     this.onDismiss = o.onDismiss;
+    if (o.movable) {
+      this.el.classList.add('movable');
+      this.titleEl.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const r = this.el.getBoundingClientRect();
+        startDrag(e, { move: (dx, dy) => this.moveTo(r.left + dx, r.top + dy) });
+      });
+    }
     // Capture, so Escape is seen even in a text field (which stops its key events).
     this.el.addEventListener(
       'keydown',
@@ -86,6 +97,15 @@ export class NxPopover extends NxWidget<HTMLDivElement> {
     const left = Math.max(MARGIN, Math.min(target.left, vw - MARGIN - w));
     Object.assign(this.el.style, { left: `${left}px`, top: `${top}px` });
     return this;
+  }
+
+  /** Puts its top left corner at (left, top) in the viewport, kept inside the window. */
+  moveTo(left: number, top: number): void {
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const x = Math.max(MARGIN - this.el.offsetWidth + 40, Math.min(left, vw - 40));
+    const y = Math.max(0, Math.min(top, vh - 20));
+    Object.assign(this.el.style, { left: `${x}px`, top: `${y}px` });
   }
 
   close(): void {

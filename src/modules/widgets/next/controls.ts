@@ -244,24 +244,34 @@ export interface NxTextFieldOptions {
   label?: string;
   placeholder?: string;
   disabled?: boolean;
+  /**
+   * How many lines tall (default 1). Taller, the text wraps onto them — still one line of text:
+   * Return commits, and line breaks typed or pasted become spaces.
+   */
+  lines?: number;
+  /** Check spelling as it is typed (default off). */
+  spellcheck?: boolean;
   onCommit?: (value: string) => void;
   onInput?: (value: string) => void;
 }
 
-/** A white, sunken single-line text field, optionally with a left label. */
+/** A white, sunken text field, optionally with a left label: one line, or text wrapping over several. */
 export class NxTextField extends NxWidget<HTMLLabelElement> {
-  readonly input: HTMLInputElement;
+  readonly input: HTMLInputElement | HTMLTextAreaElement;
   private readonly field: HTMLDivElement;
 
   constructor(o: NxTextFieldOptions = {}) {
     super(h('label'), 'nx-textfield');
     if (o.label) this.el.append(h('span', { className: 'nx-label', textContent: o.label }));
-    this.field = h('div', { className: 'nx-field' });
-    this.input = h('input', { type: 'text', value: o.value ?? '', placeholder: o.placeholder ?? '', spellcheck: false });
+    const lines = Math.max(1, Math.floor(o.lines ?? 1));
+    this.field = h('div', { className: lines > 1 ? 'nx-field multiline' : 'nx-field' });
+    const props = { value: o.value ?? '', placeholder: o.placeholder ?? '', spellcheck: !!o.spellcheck };
+    this.input = lines > 1 ? h('textarea', { ...props, rows: lines }) : h('input', { ...props, type: 'text' });
+    if (lines > 1) this.field.style.setProperty('--nx-field-lines', String(lines));
     this.field.append(this.input);
     this.el.append(this.field);
     this.disabled = !!o.disabled;
-    this.input.addEventListener('keydown', (e) => {
+    (this.input as HTMLElement).addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter' && o.onCommit) {
         // Consumed: if committing moves focus, the key must not land in the next element.
@@ -269,7 +279,14 @@ export class NxTextField extends NxWidget<HTMLLabelElement> {
         o.onCommit(this.value);
       }
     });
-    this.input.addEventListener('input', () => o.onInput?.(this.value));
+    this.input.addEventListener('input', () => {
+      if (this.input instanceof HTMLTextAreaElement && /[\r\n]/.test(this.input.value)) {
+        const at = this.input.selectionStart;
+        this.input.value = this.input.value.replace(/\r\n?|\n/g, ' ');
+        this.input.setSelectionRange(at, at);
+      }
+      o.onInput?.(this.value);
+    });
   }
 
   get value(): string {

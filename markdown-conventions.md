@@ -16,7 +16,7 @@ A node's label is the text of the file's first `#` heading, at any level, as pla
 
 ## Tracked changes
 
-The [MD Editor](md-editor.md) writes additions as `++…++`, deletions as `~~…~~` and highlights as `^^…^^`, each possibly opening with an `@@…@@` thread of attributions. Titles and dependencies are read as if every change were accepted: deleted text is left out, added text kept, and threads dropped.
+The [MD Editor](md-editor.md) writes {--additions as `++…++`, deletions as `~~…~~` and highlights as `^^…^^`, each possibly opening with an `@@…@@` thread of attributions--}{>>Claude 2026-11-18 13:56: Changed: review marks are CriticMarkup<<}{++review marks in CriticMarkup: additions as `{++…++}`, deletions as `{--…--}` and highlights as `{==…==}`, each possibly followed by notes (`{>>…<<}`), and notes on their own as comments++}{>>Claude 2026-11-18 13:56<<}. Titles and dependencies are read as if every change were accepted: deleted text is left out, added text kept, and {--threads--}{>>Claude 2026-11-18 13:56<<}{++notes++}{>>Claude 2026-11-18 13:56<<} dropped.
 
 ## Writing
 

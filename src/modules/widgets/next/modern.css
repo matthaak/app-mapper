@@ -229,6 +229,9 @@
 [data-theme='modern'] .nx-field:focus-within { border-color: var(--m-accent); box-shadow: 0 0 0 3px var(--m-accent-ring); }
 [data-theme='modern'] .nx-field > input { padding: 0 8px; border: none; color: var(--m-text); caret-color: var(--m-accent); }
 [data-theme='modern'] .nx-field > input::selection { background: var(--m-accent-soft); }
+[data-theme='modern'] .nx-field.multiline { height: auto; }
+[data-theme='modern'] .nx-field.multiline > textarea { padding: 4px 8px; border: none; color: var(--m-text); caret-color: var(--m-accent); height: calc(var(--nx-field-lines) * 1.3em + 8px); }
+[data-theme='modern'] .nx-field.multiline > textarea::selection { background: var(--m-accent-soft); }
 [data-theme='modern'] .nx-field.disabled { background: var(--m-bar); }
 [data-theme='modern'] :is(.nx-field.disabled > input, .nx-label.disabled) { color: var(--m-faint); }
 [data-theme='modern'] .nx-etched { height: 1px; border-top: 1px solid var(--m-line); border-bottom: none; }

@@ -1,0 +1,31 @@
+{
+  "appId": "app.mapper.mdeditor",
+  "productName": "MD Editor",
+  "directories": {
+    "output": "release/md-editor"
+  },
+  "files": [
+    "dist/**",
+    "dist-electron/**",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "name": "md-editor",
+    "productName": "MD Editor",
+    "main": "dist-electron/md-main.js"
+  },
+  "fileAssociations": [
+    {
+      "ext": ["md", "markdown"],
+      "name": "Markdown Document",
+      "role": "Editor"
+    }
+  ],
+  "mac": {
+    "target": ["dmg", "zip"],
+    "category": "public.app-category.productivity"
+  },
+  "win": {
+    "target": ["nsis", "zip"]
+  }
+}

@@ -2,7 +2,7 @@
 import { h } from '../widgets';
 import type { ActionId } from './actions';
 
-export type ToolId = ActionId | 'undo' | 'redo' | 'track' | 'save';
+export type ToolId = ActionId | 'undo' | 'redo' | 'track' | 'spelling' | 'save';
 
 export interface Tool {
   id: ToolId;
@@ -36,7 +36,7 @@ export const TOOLS: Tool[][] = [
   [
     { id: 'bold', title: 'Bold', code: 'KeyB', glyph: () => text('B', 'bold') },
     { id: 'italic', title: 'Italic', code: 'KeyI', glyph: () => text('I', 'italic') },
-    { id: 'highlight', title: 'Highlight', code: 'KeyH', shift: true, glyph: () => text('ab', 'highlight') },
+    { id: 'highlight', title: 'Highlight or Comment', code: 'KeyH', shift: true, glyph: () => text('ab', 'highlight') },
     { id: 'code', title: 'Inline code', code: 'KeyE', glyph: () => svg('<path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" fill="none" stroke="#000" stroke-width="1.4"/>') },
   ],
   [
@@ -111,6 +111,16 @@ export const TOOLS: Tool[][] = [
       code: 'Backspace',
       shift: true,
       glyph: () => svg('<path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="#000" stroke-width="1.8"/>'),
+    },
+  ],
+  [
+    {
+      id: 'spelling',
+      title: 'Show spelling errors',
+      glyph: () =>
+        svg(
+          '<text x="0.5" y="9" font-family="Helvetica, Arial, sans-serif" font-size="8" font-weight="bold">abc</text><path d="M1 12.5l1.5-1.5 1.5 1.5 1.5-1.5 1.5 1.5 1.5-1.5 1.5 1.5 1.5-1.5 1.5 1.5 1.5-1.5" fill="none" stroke="#d00000" stroke-width="1.2"/>',
+        ),
     },
   ],
   [

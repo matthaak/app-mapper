@@ -1,5 +1,5 @@
 import { NxButton, NxPopover, NxScroller, NxSwitch, NxTabs, NxTextField, Widget, h } from '../widgets';
-import { CHANGES, applyAction, commentOn, marksAt, type ActionId } from './actions';
+import { CHANGES, applyAction, commentOn, editNote, marksAt, type ActionId } from './actions';
 import { Review, markKeys, type Box, type Extent } from './review';
 import { TextIndex, lowerBound, midY, pointRect, rangeRect } from './geometry';
 import { makeNote } from './notes';
@@ -15,12 +15,13 @@ export interface MarkdownEditorOptions {
   placeholder?: string;
   /**
    * The current user's name or initials (letters, digits, _). New highlights are attributed to
-   * them, with an optional comment asked for when highlighting. Without it, highlights are plain.
+   * them, with an optional comment asked for when highlighting. Without it, highlights are plain
+   * (and no comments can be anchored).
    */
   user?: string;
   /**
-   * Start with Track Changes on: the user's typing becomes ++additions++ and their deletions
-   * ~~deletions~~, attributed to them. Needs `user`. Toggled from the toolbar too.
+   * Start with Track Changes on: the user's typing becomes {++additions++} and their deletions
+   * {--deletions--}, attributed to them. Needs `user`. Toggled from the toolbar too.
    */
   trackChanges?: boolean;
   /** Called when the markdown changes (Visual edits are reported after a short pause). */
@@ -43,6 +44,14 @@ export interface MarkdownEditorOptions {
    * because they highlighted or used the Track Changes button, which always turn it on.
    */
   onAnnotationsChange?: (on: boolean, manual: boolean) => void;
+  /**
+   * Show spelling errors (the toolbar's Show Spelling Errors button): Visual's text is spell-checked,
+   * code excepted. Raw never is: a textarea is checked all or nothing, so its code and threads
+   * would be too. Default: on.
+   */
+  spellcheck?: boolean;
+  /** The user turned spelling errors on or off with the toolbar button. */
+  onSpellcheckChange?: (on: boolean) => void;
 }
 
 /** A document state for undo: the markdown and the selection, as markdown indices. */
@@ -70,19 +79,19 @@ const SYNC_DELAY = 150;
 /** Within this fraction of a viewport of either end, scroll positions pin to that end. */
 const EDGE_ZONE = 0.6;
 
-const MARK_CLASS: Record<MarkKind, string> = { highlight: 'mk-hl', strike: 'mk-st', underline: 'mk-un' };
+const MARK_CLASS: Record<MarkKind, string> = { highlight: 'mk-hl', strike: 'mk-st', underline: 'mk-un', comment: 'mk-hl' };
 /** How many author colours there are (`--md-author-1` …, in md-editor.css); then they repeat. */
 const AUTHOR_COLORS = 8;
 
 /**
- * Each change's colour (by index in `marks`; null for highlights), as Word colours changes by
+ * Each change's colour (by index in `marks`; null for highlights and comments), as Word colours changes by
  * author: one colour per author for both additions and deletions. Authors take the colours in
  * the order of their first change (by its time; changes with no time after, in document order;
  * changes with no author count as one more author), so a colour stays with its author as
  * edits are made, and a new author takes the next one.
  */
 function authorColors(marks: Mark[]): (string | null)[] {
-  const changes = marks.filter((m) => m.kind !== 'highlight');
+  const changes = marks.filter((m) => m.kind === 'strike' || m.kind === 'underline');
   const first = new Map<string, { time: number; at: number }>();
   for (const m of changes) {
     const who = m.notes[0]?.author ?? '';
@@ -92,11 +101,11 @@ function authorColors(marks: Mark[]): (string | null)[] {
   }
   const order = [...first].sort(([, a], [, b]) => a.time - b.time || a.at - b.at).map(([who]) => who);
   return marks.map((m) =>
-    m.kind === 'highlight' ? null : `var(--md-author-${(order.indexOf(m.notes[0]?.author ?? '') % AUTHOR_COLORS) + 1})`,
+    m.kind === 'highlight' || m.kind === 'comment' ? null : `var(--md-author-${(order.indexOf(m.notes[0]?.author ?? '') % AUTHOR_COLORS) + 1})`,
   );
 }
 /** The elements each kind of mark renders as (or is pasted as) in Visual. */
-const MARK_TAGS: Record<MarkKind, string> = { highlight: 'mark', strike: 'del, s, strike', underline: 'u, ins' };
+const MARK_TAGS: Record<MarkKind, string> = { highlight: 'mark', strike: 'del, s, strike', underline: 'u, ins', comment: '.md-anchor' };
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const normalize = (s: string) => s.replace(/\r\n?/g, '\n');
@@ -105,10 +114,12 @@ const normalize = (s: string) => s.replace(/\r\n?/g, '\n');
  * A markdown editor with two views of one document: Visual (rendered, editable in place) and
  * Raw (the markdown source, with highlights and tracked changes styled in place too).
  *
- * Tracked changes: ++additions++ and ~~deletions~~, which Accept or Reject Change(s) resolves, and which
- * Track Changes records as the user types (see track.ts). They and
- * ^^highlights^^ may lead with a thread of attributions (`@@author.time comment@@reply@@`, see notes.ts), shown in
- * boxes in the review column at the right (see review.ts), in both views; Raw also shows them as text.
+ * Review marks are CriticMarkup. Tracked changes: {++additions++} and {--deletions--}, which
+ * Accept or Reject Change(s) resolves, and which Track Changes records as the user types (see
+ * track.ts). They and {==highlights==} may be followed by notes (`{>>author 2026-11-18 13:55: comment<<}`,
+ * then replies, see notes.ts), and notes after no mark are a comment anchored there. Notes show
+ * in boxes in the review column at the right (see review.ts), in both views; Raw also shows
+ * them as text.
  *
  * The markdown is the single source of truth. Switching views carries the selection across
  * exactly (Raw → Visual through the renderer's source map, Visual → Raw through sentinels in
@@ -165,6 +176,8 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   private prompt: NxPopover | null = null;
   /** Track Changes is on (only ever with a user). */
   private tracking: boolean;
+  /** Spelling errors are shown (in Visual). */
+  private spelling: boolean;
   /** Puts back the selection the prompt took focus from. */
   private restoreFocus: (() => void) | null = null;
 
@@ -175,6 +188,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     this.lastEmitted = this.md;
     this.current = o.mode ?? 'visual';
     this.tracking = !!(o.trackChanges && o.user);
+    this.spelling = o.spellcheck ?? true;
     this.history = [{ md: this.md, anchor: 0, focus: 0 }];
 
     // Header: toolbar and tabs. Mouse-downs there never take focus from the text.
@@ -206,7 +220,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
 
     // Document: one scroller holding both views (only one shown).
     this.scroller = h('div', { className: 'md-scroll' });
-    this.visual = h('div', { className: 'md-visual md-panel', contentEditable: 'true' });
+    this.visual = h('div', { className: 'md-visual md-panel', contentEditable: 'true', spellcheck: this.spelling });
     this.visual.dataset.placeholder = o.placeholder ?? 'Start typing…';
     this.rawPanel = h('div', { className: 'md-raw md-panel' });
     this.layer = h('div', { className: 'md-raw-layer' });
@@ -221,6 +235,8 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
         color: (i) => this.markColor(i),
         enabled: () => this.showAnnotations,
         comment: (key, text) => this.addComment(key, text),
+        edit: (key, index, text) => this.editComment(key, index, text),
+        spellcheck: () => this.spellcheck,
       },
       this.scroller,
     );
@@ -261,6 +277,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     this.updateUndo();
     this.updateAccept();
     this.updateTrack();
+    this.buttons.get('spelling')!.on = this.spelling;
     this.modified = false;
   }
 
@@ -307,6 +324,31 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     this.setSelection(anchor, focus);
     this.restoreView(view);
     this.opts.onModeChange?.(next);
+  }
+
+  /** Spelling errors shown (see `spellcheck` in the options). */
+  get spellcheck(): boolean {
+    return this.spelling;
+  }
+  set spellcheck(on: boolean) {
+    if (on === this.spelling) return;
+    this.spelling = on;
+    this.visual.spellcheck = on;
+    this.buttons.get('spelling')!.on = on;
+    // The browser checks text only as it changes, so Visual is drawn afresh to be checked again.
+    if (on && this.current === 'visual') this.redrawVisual();
+  }
+
+  /** Renders Visual again, keeping its selection, focus and scroll position. */
+  private redrawVisual(): void {
+    this.flushVisual();
+    const focused = document.activeElement === this.visual;
+    const { anchor, focus } = this.selection();
+    const top = this.scroller.scrollTop;
+    this.renderVisual();
+    this.scroller.scrollTop = top;
+    if (focused) this.setSelection(anchor, focus);
+    else this.parkSelection(anchor, focus);
   }
 
   /** Review Mode (see `annotations` in the options). */
@@ -366,9 +408,9 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   private leaveAddition(): void {
     const { anchor, focus } = this.selection();
     if (anchor !== focus) return;
-    const m = this.rendered().marks.find((x) => x.kind === 'underline' && x.body <= focus && focus <= x.to - 2);
+    const m = this.rendered().marks.find((x) => x.kind === 'underline' && x.body <= focus && focus <= x.end);
     if (!m) return;
-    const after = focus - m.body >= m.to - 2 - focus;
+    const after = focus - m.body >= m.end - focus;
     const at = after ? m.to : m.from;
     this.setSelection(at, at);
   }
@@ -394,11 +436,11 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     const marks = this.rendered().marks.filter((m) => CHANGES.includes(m.kind));
     // The change(s) the caret is at the end (or start) of, from inside or out, then out through
     // any they end (or start) with.
-    const at0 = end ? marks.filter((x) => x.to - 2 === k || x.to === k).map((x) => x.to) : marks.filter((x) => x.body === k || x.from === k).map((x) => x.from);
+    const at0 = end ? marks.filter((x) => x.end === k || x.to === k).map((x) => x.to) : marks.filter((x) => x.body === k || x.from === k).map((x) => x.from);
     if (!at0.length) return false;
     let at = end ? Math.max(...at0) : Math.min(...at0);
     for (let outer = true; outer; ) {
-      const o = marks.find((x) => (end ? x.to - 2 === at : x.body === at));
+      const o = marks.find((x) => (end ? x.end === at : x.body === at));
       outer = !!o;
       if (o) at = end ? o.to : o.from;
     }
@@ -601,9 +643,13 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     const marks = this.rendered().marks; // text === md in Raw
     const colors = authorColors(marks);
     const ranges = [
-      ...marks.map((m, k) => ({ from: m.from, to: m.to, cls: MARK_CLASS[m.kind], color: colors[k] })),
-      // A mark's thread: from its first `@@` to the end of its last.
-      ...marks.filter((m) => m.notes.length).map((m) => ({ from: m.from + 2, to: m.body, cls: 'mk-nt', color: null })),
+      // A mark, to its closing delimiter; then its notes, in the change's colour (a highlight's
+      // highlighted too; an anchored comment is all notes, and highlighted).
+      ...marks.map((m, k) => ({ from: m.from, to: m.kind === 'comment' ? m.to : m.end + 3, cls: MARK_CLASS[m.kind], color: colors[k] })),
+      ...marks
+        .map((m, k) => ({ m, k }))
+        .filter(({ m }) => m.kind !== 'comment' && m.notes.length)
+        .map(({ m, k }) => ({ from: m.end + 3, to: m.to, cls: m.kind === 'highlight' ? 'mk-hl' : 'mk-nc', color: colors[k] })),
     ];
     const cuts = [...new Set([0, text.length, ...ranges.flatMap((m) => [m.from, m.to])])].sort((a, b) => a - b);
     let html = '';
@@ -935,6 +981,10 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     if (id === 'undo') this.undo();
     else if (id === 'redo') this.redo();
     else if (id === 'highlight') this.highlight();
+    else if (id === 'spelling') {
+      this.spellcheck = !this.spelling;
+      this.opts.onSpellcheckChange?.(this.spelling);
+    }
     else if (id === 'track') {
       // Using Track Changes always brings the annotations back into view.
       this.setAnnotations(true, false);
@@ -1073,46 +1123,68 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
    * Highlights the selection, first asking for an optional comment (when there is a user to
    * attribute it to). Inside an existing highlight, removes it straight away.
    */
+  /**
+   * The highlight button: removes the highlight or comment the selection is in, or asks for a
+   * comment and highlights the selection — or, with none, anchors the comment at the caret.
+   */
   private highlight(): void {
     if (this.prompt) return;
     this.checkpoint();
     const { anchor, focus } = this.selection();
-    const removing = marksAt(this.rendered().marks, Math.min(anchor, focus), Math.max(anchor, focus), ['highlight']).length > 0;
+    const removing = marksAt(this.rendered().marks, Math.min(anchor, focus), Math.max(anchor, focus), ['highlight', 'comment']).length > 0;
     if (!this.opts.user || removing) this.exec('highlight');
+    else if (anchor === focus) this.ask({ id: 'highlight', title: 'Comment', button: 'Comment', placeholder: 'Comment' });
     else this.ask({ id: 'highlight', title: 'Highlight', button: 'Highlight', placeholder: 'Comment (optional)' });
   }
 
-  /** Opens the comment prompt by the selection; on OK, runs `id` with the comment. */
+  /**
+   * Opens the comment prompt by the selection (a panel that can be moved by its title); on OK,
+   * runs `id` with the comment. While it is open, the document shows what `id` will do — the
+   * highlight, or the anchored comment — with the comment as typed so far in its box; Cancel
+   * takes that away again.
+   */
   private ask(o: { id: ActionId; title: string; button: string; placeholder: string }): void {
+    const user = this.opts.user;
+    if (!user) return;
+    this.flushVisual();
     this.reveal(this.selection().focus);
-    // The prompt takes focus; remember the selection exactly, to put it back.
     const raw = this.current === 'raw';
     const ends = raw ? null : this.visualEnds();
     const at = raw ? this.layerRect(this.textarea.selectionEnd) : ends && pointRect(ends.focus);
+    const before = { md: this.md, ...this.selection() };
+    const start = Math.min(before.anchor, before.focus);
+    const end = Math.max(before.anchor, before.focus);
+    const when = new Date();
+    // The preview: drawn, but not a change (no undo step, nothing reported).
+    const preview = (comment: string) => {
+      this.md = applyAction(o.id, before.md, start, end, this.current, makeNote(user, comment, when)).md;
+      this.renderCurrent();
+    };
     this.restoreFocus = () => {
-      if (raw) {
-        this.textarea.focus({ preventScroll: true });
-      } else if (ends) {
-        this.visual.focus({ preventScroll: true });
-        getSelection()?.setBaseAndExtent(ends.anchor.node, ends.anchor.offset, ends.focus.node, ends.focus.offset);
+      if (this.md !== before.md) {
+        this.md = before.md;
+        this.renderCurrent();
       }
+      (raw ? this.textarea : this.visual).focus({ preventScroll: true });
+      this.setSelection(before.anchor, before.focus);
     };
 
     const done = (v: string) => this.closePrompt(o.id, v);
-    const field = new NxTextField({ placeholder: o.placeholder, onCommit: done });
+    const field = new NxTextField({ placeholder: o.placeholder, lines: 2, spellcheck: this.spellcheck, onCommit: done, onInput: preview });
     const buttons = h('div', { className: 'md-prompt-buttons' });
     new NxButton({ label: 'Cancel', onClick: () => this.closePrompt() }).mount(buttons);
     new NxButton({ label: o.button, returnKey: true, onClick: () => done(field.value) }).mount(buttons);
-    const who = h('div', { className: 'md-prompt-who', textContent: `As ${this.opts.user}` });
-    this.prompt = new NxPopover({ title: o.title, onDismiss: () => this.closePrompt() });
+    const who = h('div', { className: 'md-prompt-who', textContent: `As ${user}` });
+    this.prompt = new NxPopover({ title: o.title, movable: true, onDismiss: () => this.closePrompt() });
     this.prompt.el.classList.add('md-prompt');
     this.prompt.setContent(field, who, buttons);
     const box = this.scroller.getBoundingClientRect();
     this.prompt.showAt(at ?? { left: box.left + 24, top: box.top, bottom: box.top + 24 });
+    preview('');
     field.focus();
   }
 
-  /** Closes the comment prompt, putting the selection back; with an `id`, then runs it. */
+  /** Closes the comment prompt, putting the text and selection back; with an `id`, then runs it. */
   private closePrompt(id?: ActionId, comment = ''): void {
     const p = this.prompt;
     if (!p) return;
@@ -1177,6 +1249,20 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   private addComment(key: string, text: string): string | null {
     const user = this.opts.user;
     if (!user || !text.trim()) return null;
+    return this.changeThread(key, (md, m) => commentOn(md, m, makeNote(user, text)));
+  }
+
+  /** Changes note `index` of the mark with `key` to say `text` (anyone's note), keeping the selection. */
+  private editComment(key: string, index: number, text: string): string | null {
+    return this.changeThread(key, (md, m) => editNote(md, m, index, text));
+  }
+
+  /**
+   * Changes the thread of the mark with `key` by `change` (typed in the review column: the
+   * selection moves with the text, but focus and the scroll position stay where they are), as
+   * one undo step. Returns the mark's key after, or null if it went.
+   */
+  private changeThread(key: string, change: (md: string, m: Mark) => { md: string; map: (p: number) => number }): string | null {
     this.flushVisual();
     this.checkpoint();
     // Typed in the review column: the editor's selection moves with the text, but focus (and
@@ -1188,7 +1274,8 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     const m = marks[markKeys(this.md, marks).indexOf(key)];
     if (!m) return null;
     this.history[this.pos] = { md: this.md, ...sel };
-    const r = commentOn(this.md, m, makeNote(user, text));
+    const r = change(this.md, m);
+    if (r.md === this.md) return key;
     const anchor = r.map(sel.anchor);
     const focus = r.map(sel.focus);
     this.md = r.md;
@@ -1272,7 +1359,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     let moved = false;
     for (;;) {
       const el: Element | null | undefined = (node instanceof Element ? node : node.parentElement)?.closest('[data-mark]');
-      if (!el || !this.visual.contains(el) || el.textContent) break;
+      if (!el || !this.visual.contains(el) || el.textContent || el.classList.contains('md-anchor')) break;
       const parent: Node = el.parentNode!;
       offset = Array.prototype.indexOf.call(parent.childNodes, el);
       el.replaceWith(...el.childNodes);

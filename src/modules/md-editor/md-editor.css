@@ -12,6 +12,7 @@
   --md-rule: #a0a0a0;
   --md-code-bg: #ededed;
   --md-link: #1f47b8;
+  --md-anchor: #d9a800;
   --md-highlight: #fbe46b;
   /*
    * Tracked changes are coloured by author, as in Word: one colour each, for both additions
@@ -99,21 +100,27 @@
   grid-template-rows: max-content;
   /* Its height is the editor's, whatever it holds: the views and the column fill it (100cqh). */
   container-type: size;
+  /* Visual's page: at most this wide. */
+  --md-page: 820px;
 }
 /* A quarter of the editor's width (the scroller's, plus the NeXT scroller's 18px). */
 .md-scroll.md-reviewing { grid-template-columns: minmax(0, 1fr) calc(25% + 4.5px); }
 :root:not([data-theme='modern']) .md-scroll::-webkit-scrollbar { display: none; }
 .md-scroll > .md-panel { grid-column: 1; grid-row: 1; min-width: 0; min-height: 100cqh; }
-/* Fills its column, up to its max-width, centered beyond that (as a block would; a grid item with auto margins would shrink to its text). */
-.md-scroll > .md-visual { width: 100%; }
+/*
+ * Fills its column, up to the page's width, from the left: the text keeps its left edge however
+ * wide the editor is, and whether the review column shows or not (beside it, the text only wraps
+ * narrower). Stretched, not sized by margins, which would shrink a grid item to its text.
+ */
+.md-scroll > .md-visual { width: auto; margin: 0; }
 .md-panel[hidden] { display: none; }
 
 /* ---- Visual ---- */
 
 .md-visual {
   box-sizing: border-box;
-  max-width: 820px;
-  margin: 0 auto;
+  max-width: var(--md-page, 820px);
+  margin: 0;
   padding: 28px 36px 40px;
   font: 15px/1.65 var(--md-font);
   color: var(--md-ink);
@@ -165,6 +172,9 @@
 .md-visual pre code { padding: 0; font-size: inherit; background: none; }
 .md-visual img { max-width: 100%; }
 .md-visual mark { background: var(--md-highlight); color: inherit; border-radius: 2px; }
+/* A comment anchored at a point: a slim marker there (it holds no text). */
+.md-visual .md-anchor { display: inline-block; width: 3px; height: 1.15em; margin: 0 1px; vertical-align: text-bottom; background: var(--md-anchor); border-radius: 1px; }
+.md-plain .md-visual .md-anchor { display: none; }
 /* Tracked changes: additions underlined, deletions struck, in their author's colour (set by the editor). */
 .md-visual u { color: var(--md-change, var(--md-author-1)); text-decoration: underline; text-underline-offset: 3px; }
 .md-visual del { color: var(--md-change, var(--md-author-1)); text-decoration: line-through; }
@@ -185,7 +195,8 @@
 .md-plain .md-visual :is(u, del) { color: inherit; text-decoration: none; }
 .md-plain .md-visual mark { background: none; }
 .md-plain .md-raw-layer :is(.mk-st, .mk-un) { color: inherit; text-decoration: none; }
-.md-plain .md-raw-layer :is(.mk-hl, .mk-nt) { background: none; }
+.md-plain .md-raw-layer .mk-hl { background: none; }
+.md-plain .md-raw-layer .mk-nc { color: inherit; }
 
 /* ---- Raw: a transparent textarea over a layer that draws the same text's styling ---- */
 
@@ -241,7 +252,8 @@
 /* In the innermost change's author colour, as in Visual. */
 .md-raw-layer :is(.mk-st, .mk-un) { color: var(--md-change); }
 /* Attributions: a grey tint, layered over any highlight. */
-.md-raw-layer .mk-nt { background-image: linear-gradient(rgba(0, 0, 0, 0.09), rgba(0, 0, 0, 0.09)); border-radius: 2px; }
+/* A change's notes: in the change's colour, not underlined or struck. */
+.md-raw-layer .mk-nc { color: var(--md-change); }
 
 /* ---- The review column: marks' threads in grey boxes, tied to their text by dotted lines ---- */
 
@@ -316,6 +328,10 @@
 .md-note-time { color: var(--nx-dark); font-size: 11px; }
 .md-note-text { margin-top: 3px; line-height: 1.3; white-space: pre-wrap; overflow-wrap: break-word; }
 .md-note.reply { margin-left: 14px; padding-top: 7px; border-top: 1px solid var(--nx-light); }
+/* In the open box, any note can be edited: clicked, its comment becomes a field. */
+.md-review-box.active .md-note { cursor: text; border-radius: 2px; }
+.md-review-box.active .md-note:not(.editing):hover { background: rgba(0, 0, 0, 0.05); }
+.md-note.editing .nx-textfield { display: flex; margin-top: 3px; }
 
 .md-prompt .nx-popover-body { width: 280px; display: flex; flex-direction: column; gap: 6px; }
 .md-prompt .nx-textfield { display: flex; }

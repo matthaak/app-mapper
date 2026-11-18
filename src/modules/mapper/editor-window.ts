@@ -14,6 +14,9 @@ export interface EditorWindowOptions {
   /** Start with Review Mode on or off (default: on if the file has any changes or highlights). */
   annotations?: boolean;
   onAnnotationsChange?(on: boolean, manual: boolean): void;
+  /** Show spelling errors (see the MD Editor), and the user's toggling of it. */
+  spellcheck: boolean;
+  onSpellcheckChange(on: boolean): void;
   onChange(markdown: string): void;
   /** The toolbar's Save button (⌘S). */
   onSave(): void;
@@ -57,6 +60,8 @@ export class EditorWindow {
       trackChanges: o.trackChanges,
       annotations: o.annotations,
       onAnnotationsChange: o.onAnnotationsChange,
+      spellcheck: o.spellcheck,
+      onSpellcheckChange: o.onSpellcheckChange,
       onChange: (md) => o.onChange(md),
       onSave: () => o.onSave(),
     }).mount(this.win.content);
@@ -106,6 +111,8 @@ export class EditorTab {
       trackChanges: o.trackChanges,
       annotations: o.annotations,
       onAnnotationsChange: o.onAnnotationsChange,
+      spellcheck: o.spellcheck,
+      onSpellcheckChange: o.onSpellcheckChange,
       onChange: (md) => o.onChange(md),
       onSave: () => o.onSave(),
     }).mount(page);

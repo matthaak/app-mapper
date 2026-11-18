@@ -3,7 +3,7 @@
  * selection). Both views use these — Visual maps its selection into the markdown, applies the
  * command, re-renders and maps the selection back — so a command does the same thing in each.
  */
-import { verdictOf } from './notes';
+import { cleanComment, verdictOf } from './notes';
 import { continuesItem, render, type Mark, type MarkKind } from './parse';
 import type { MdMode } from './types';
 
@@ -31,8 +31,8 @@ export interface Edit {
 }
 
 /**
- * Applies `id` to the selection [start, end) of `md`. `note` is an attribution token (see
- * notes.ts): for a new highlight, or the user's "Accepted" or "Rejected" for Accept and Reject.
+ * Applies `id` to the selection [start, end) of `md`. `note` is a note block (see notes.ts):
+ * for a new highlight or comment, or the user's "Accepted" or "Rejected" for Accept and Reject.
  */
 export function applyAction(id: ActionId, md: string, start: number, end: number, mode: MdMode, note = ''): Edit {
   switch (id) {
@@ -45,10 +45,12 @@ export function applyAction(id: ActionId, md: string, start: number, end: number
     case 'italic':
       return toggleInline(md, start, end, '*', 1, 'italic text', '_');
     case 'highlight': {
-      // Inside a highlight (or touching one): remove it, notes and all. Otherwise add one.
-      const on = marksAt(render(md).marks, start, end, ['highlight']);
+      // Inside a highlight or at a comment (or touching one): remove it, notes and all.
+      // Otherwise highlight the selection, or with none, anchor a comment at the caret.
+      const r = render(md);
+      const on = marksAt(r.marks, start, end, ['highlight', 'comment']);
       if (on.length) return cut(md, start, end, on.flatMap(unwrapRanges));
-      return toggleInline(md, start, end, '^', 2, 'highlighted text', undefined, note);
+      return start === end ? anchor(md, r.code, start, note) : highlight(md, r.code, start, end, note);
     }
     case 'code':
       return toggleInline(md, start, end, '`', 1, 'code');
@@ -73,7 +75,7 @@ export function applyAction(id: ActionId, md: string, start: number, end: number
   }
 }
 
-/** Tracked changes: ++additions++ and ~~deletions~~. */
+/** Tracked changes: {++additions++} and {--deletions--}. */
 export const CHANGES: readonly MarkKind[] = ['underline', 'strike'];
 
 /**
@@ -86,12 +88,10 @@ export function marksAt(marks: readonly Mark[], start: number, end: number, kind
   return marks.filter((m) => kinds.includes(m.kind) && (start === end ? m.from <= start && start <= m.to : start < m.to && end > m.from));
 }
 
-const DELIM = 2; // ^^ ~~ ++
-
-/** The delimiters and notes of a mark: removing them leaves its text. */
+/** The delimiters and notes of a mark: removing them leaves its text (a comment: nothing). */
 const unwrapRanges = (m: Mark): [number, number][] => [
   [m.from, m.body],
-  [m.to - DELIM, m.to],
+  [m.end, m.to],
 ];
 
 /**
@@ -112,9 +112,9 @@ function resolve(md: string, start: number, end: number, accept: boolean, note: 
   for (const m of marks) {
     if (note && m.notes.some((n) => n.comment)) {
       if (verdictOf(m.notes) === (accept ? 'accepted' : 'rejected')) continue;
-      edits.push([m.notes[m.notes.length - 1].to, m.notes[m.notes.length - 1].to, `@@${note.slice(2, -2)}`]);
+      edits.push([m.to, m.to, note]);
     } else {
-      for (const [a, b] of goes(m) ? removal(md, visible, m.from, m.to) : unwrapRanges(m)) edits.push([a, b, '']);
+      for (const [a, b] of goes(m) ? markRemoval(md, visible, m) : unwrapRanges(m)) edits.push([a, b, '']);
     }
   }
   return splice(md, start, end, edits);
@@ -154,22 +154,43 @@ function splice(md: string, start: number, end: number, edits: [number, number, 
 }
 
 /**
- * Adds `note` (a one-note thread, `@@author.time comment@@`) to mark `m`'s thread: as a reply
- * after its last note, or, when the mark is the note's author's own and has no comment yet, as
- * that comment (keeping the change's time). `map` carries a position over.
+ * Adds `note` (a note block, `{>>author 2026-11-18 13:55: comment<<}`) to mark `m`: as a reply after its
+ * last note, or, when the mark is the note's author's own and has no comment yet, as that
+ * comment (keeping the change's time). `map` carries a position over.
  */
 export function commentOn(md: string, m: Mark, note: string): { md: string; map: (p: number) => number } {
-  const text = note.slice(2, -2);
+  const text = note.slice(3, -3);
   const first = m.notes[0];
-  const last = m.notes[m.notes.length - 1];
   const own = first && m.notes.length === 1 && !first.comment && first.author === /^\w+/.exec(text)?.[0];
   let a: number;
   let b: number;
   let put: string;
-  if (own) [a, b, put] = [first.from, first.to, md.slice(first.from, first.to).trimEnd() + text.replace(/^\w+(?:\.\d+)?/, '')];
-  else if (last) [a, b, put] = [last.to, last.to, `@@${text}`];
-  else [a, b, put] = [m.body, m.body, note];
+  if (own) [a, b, put] = [first.from, first.to, md.slice(first.from, first.to).trimEnd() + text.replace(/^\w+ \d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?/, '')];
+  else [a, b, put] = [m.to, m.to, note];
   const map = (p: number) => (p < a ? p : p >= b ? p + put.length - (b - a) : a + put.length);
+  return { md: md.slice(0, a) + put + md.slice(b), map };
+}
+
+/**
+ * Changes note `i` of mark `m` to say `text` — anyone's note: it keeps its author and date.
+ * Emptied, a reply goes entirely, as does a note by nobody in particular; the first note keeps
+ * its author and date. `map` carries a position over.
+ */
+export function editNote(md: string, m: Mark, i: number, text: string): { md: string; map: (p: number) => number } {
+  const n = m.notes[i];
+  if (!n) return { md, map: (p) => p };
+  const c = cleanComment(text);
+  let a = n.from;
+  let b = n.to;
+  let put: string;
+  if (!c && (i > 0 || !n.author)) {
+    a -= 3;
+    b += 3;
+    put = '';
+  } else {
+    put = n.author ? `${n.author}${n.stamp ? ` ${n.stamp}` : ''}${c ? `: ${c}` : ''}` : c;
+  }
+  const map = (p: number) => (p < a ? p : p >= b ? p + put.length - (b - a) : a + Math.min(p - a, put.length));
   return { md: md.slice(0, a) + put + md.slice(b), map };
 }
 
@@ -182,7 +203,7 @@ export function shownChars(md: string, plain: readonly number[]): Uint8Array {
 
 const HSPACE = /[^\S\n]/;
 /** Delimiters a space may sit beyond: what is between them and a removed span. */
-const INLINE_MARKUP = /[*_~+^`]/;
+const INLINE_MARKUP = /[*_`{}+=<>-]/;
 const CLOSING = /[.,;:!?)\]}\u201d\u2019]/;
 const OPENING = /[([{\u201c\u2018]/;
 
@@ -216,6 +237,19 @@ export function removal(md: string, visible: ArrayLike<number>, from: number, to
   if (atStart || atEnd || CLOSING.test(md[r]) || OPENING.test(md[l])) [...left, ...right].forEach(drop);
   else if (left.length && right.length) right.forEach(drop);
   return out;
+}
+
+/**
+ * The ranges to delete to remove mark `m` with its text. Outside code, cleanly (see removal);
+ * in code, exactly, its spacing being the code's: only a line left blank goes too.
+ */
+export function markRemoval(md: string, visible: ArrayLike<number>, m: Mark): [number, number][] {
+  if (!m.code) return removal(md, visible, m.from, m.to);
+  // In code: exactly the mark, or its line if nothing else is left on it.
+  const ls = md.lastIndexOf('\n', m.from - 1) + 1;
+  const le = md.indexOf('\n', m.to) === -1 ? md.length : md.indexOf('\n', m.to);
+  if ((md.slice(ls, m.from) + md.slice(m.to, le)).trim()) return [[m.from, m.to]];
+  return [ls > 0 ? [ls - 1, le] : [0, Math.min(md.length, le + 1)]];
 }
 
 /** The range that deletes line [ls, le) with its line break, and a paragraph's blank line too. */
@@ -380,6 +414,74 @@ function link(md: string, start: number, end: number, mode: MdMode): Edit {
 const WORDCH = /[\p{L}\p{N}']/u;
 /** Block markers at a line's start that inline formatting goes after. */
 export const LINE_PREFIX = /^(?:\s*(?:#{1,6}\s+|>\s?|[*+-]\s+|\d+\.\s+))*\s*/;
+
+/**
+ * Highlights the selection, one highlight per line (`{==text==}` and then `note`), each line's
+ * part trimmed of spaces and, outside code, of block markers. A selection only partly in a code
+ * span takes all of it, highlighted from outside. In code a mark needs its notes, so with no
+ * `note` nothing is highlighted there.
+ */
+function highlight(md: string, code: readonly [number, number][], start: number, end: number, note: string): Edit {
+  const inSpan = ([f]: readonly [number, number]) => md[f - 1] === '`';
+  const segs: { a: number; b: number }[] = [];
+  for (let ls = lineStart(md, start); ls < end; ) {
+    const le = lineEnd(md, ls);
+    let a = Math.max(start, ls);
+    let b = Math.min(end, le);
+    const block = code.find((r) => !inSpan(r) && r[0] >= ls && r[1] <= le);
+    if (block) {
+      a = Math.max(a, block[0]);
+      b = Math.min(b, block[1]);
+    } else {
+      a = Math.max(a, ls + (LINE_PREFIX.exec(md.slice(ls, le))?.[0].length ?? 0));
+    }
+    while (a < b && /\s/.test(md[a])) a++;
+    while (b > a && /\s/.test(md[b - 1])) b--;
+    let inCode = !!block;
+    if (!block && a < b) {
+      const spans = code.filter((r) => inSpan(r) && r[0] >= ls && r[1] <= le);
+      inCode = spans.some(([f, t]) => a >= f && b <= t);
+      if (!inCode) {
+        for (const [f, t] of spans) {
+          if (a >= f && a <= t) a = f - 1;
+          if (b >= f && b <= t) b = t + 1;
+        }
+      }
+    }
+    if (a < b && (note || !inCode)) segs.push({ a, b });
+    if (le >= md.length) break;
+    ls = le + 1;
+  }
+  if (!segs.length) return { md, anchor: start, focus: end };
+  let out = '';
+  let pos = 0;
+  let selA = 0;
+  let selB = 0;
+  segs.forEach(({ a, b }, i) => {
+    out += md.slice(pos, a) + '{==';
+    if (i === 0) selA = out.length;
+    out += md.slice(a, b);
+    selB = out.length;
+    out += '==}' + note;
+    pos = b;
+  });
+  return { md: out + md.slice(pos), anchor: selA, focus: selB };
+}
+
+/**
+ * Anchors a comment (`note`) at the caret: at the end of the word it is in, after any marks and
+ * notes that end there, and past a line's block markers. Nothing without a note.
+ */
+function anchor(md: string, code: readonly [number, number][], p: number, note: string): Edit {
+  if (!note) return { md, anchor: p, focus: p };
+  while (p < md.length && WORDCH.test(md[p])) p++;
+  const marks = render(md).marks;
+  for (let m = marks.find((x) => x.end === p || (x.kind === 'comment' && x.from === p)); m; m = marks.find((x) => x.end === p || (x.kind === 'comment' && x.from === p))) p = m.to;
+  const ls = lineStart(md, p);
+  const inCode = code.some(([f, t]) => f <= p && p <= t);
+  if (!inCode) p = Math.max(p, ls + (LINE_PREFIX.exec(md.slice(ls, lineEnd(md, ls)))?.[0].length ?? 0));
+  return replace(md, p, p, note, note.length, note.length);
+}
 
 /** Length of the run of `c` ending just before `i` (dir -1) or starting at `i` (dir 1). */
 function run(md: string, i: number, c: string, dir: 1 | -1): number {

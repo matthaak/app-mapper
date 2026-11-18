@@ -11,7 +11,7 @@ const SAMPLE = `# Welcome to the Markdown Editor
 This is a paragraph with **bold text**, _italic text_ and \`inline code\`.
 A single line break stays inside the paragraph.
 
-You're editing as **Joe**. Claude has already been through this document: its additions are ++@@Claude.1794603600@@underlined++, its deletions are ~~@@Claude.1794603620@@struck through~~ — both in Claude's colour — and its notes are ^^@@Claude.1794603640 Like this one.@@highlighted^^. Each author's changes get a colour of their own, yours included. The review column at the right shows who, when and why for each — click a box to comment or reply.
+You're editing as **Joe**. Claude has already been through this document: its additions are {++underlined++}{>>Claude 2026-11-13 15:00<<}, its deletions are {--struck through--}{>>Claude 2026-11-13 15:00<<} — both in Claude's colour — and its notes are {==highlighted==}{>>Claude 2026-11-13 15:00: Like this one.<<}. Each author's changes get a colour of their own, yours included. The review column at the right shows who, when and why for each — click a box to comment or reply.
 
 ## Text Formatting
 
@@ -62,19 +62,19 @@ Visit [Example Website](https://example.com) for more information.
 
 ## Tracked Changes
 
-Additions are written \`++like this++\`, deletions \`~~like this~~\` and highlights \`^^like this^^\`. Each can start with a thread of attributions — \`@@author.timestamp comment@@reply@@\` — naming who made it, when and why: one opening \`@@\`, the notes separated by \`@@\`, one closing \`@@\`; any after the first are replies. In Raw they're right there in the text; in Visual, hover over the change.
+Review marks are CriticMarkup: additions are written \`{++like this++}\`, deletions \`{--like this--}\` and highlights \`{==like this==}\`. Each can be followed by notes — \`{>>author date time: comment<<}\`, one block per note — naming who made it, when and why; any after the first are replies. Notes after no mark are a comment anchored at that point{>>Claude 2026-11-13 15:13: Like this one.<<}. In Raw they're right there in the text; in Visual, hover over the change.
 
-The markdown is ~~@@Claude.1794604500 "Only" already says this.@@the one and only~~ the single source of truth, and every toolbar command is a transform of it, ++@@Claude.1794604560 Worth saying why this matters.@@so a command does exactly the same thing in either view++.
+The markdown is {--the one and only--}{>>Claude 2026-11-13 15:15: "Only" already says this.<<} the single source of truth, and every toolbar command is a transform of it, {++so a command does exactly the same thing in either view++}{>>Claude 2026-11-13 15:16: Worth saying why this matters.<<}.
 
-^^@@Claude.1794605400 Is this still true for very long documents?@@Joe.1794625200 Yes — tried it with a 5,000-line file.@@Claude.1794625500 Great, then let's keep it.@@Switching views is instant^^, even for long documents.
+{==Switching views is instant==}{>>Claude 2026-11-13 15:30: Is this still true for very long documents?<<}{>>Joe 2026-11-13 21:00: Yes — tried it with a 5,000-line file.<<}{>>Claude 2026-11-13 21:05: Great, then let's keep it.<<}, even for long documents.
 
 To accept a change, put the caret in it — or select across several — and press **Accept Change(s)** (the ✓): an addition keeps its text, a deletion goes. **Reject Change(s)** (the ✗) does the opposite: an addition goes, a deletion keeps its text.
 
-Changes don't need an attribution: ^^a plain highlight^^, ~~a plain deletion~~ and ++a plain addition++. They combine with the rest too: **^^bold and highlighted^^**, ~~deleted with _italic_~~, and ++added \`code\`++.
+Changes don't need an attribution: {==a plain highlight==}, {--a plain deletion--} and {++a plain addition++}. They combine with the rest too: **{==bold and highlighted==}**, {--deleted with _italic_--}, and {++added \`code\`++}.
 
 Highlight some text yourself: you'll be asked for an optional comment, and the highlight is attributed to Joe.
 
-To comment on a change or highlight, click its box in the review column: a field opens in it. Your comment is a reply to someone else's change, or the comment on your own. Boxes sit level with their text, tied to it by dotted lines, in Visual and Raw; boxes that would crowd each other stack together, centered on all their text. To comment on untouched text, highlight it.
+To comment on a change or highlight, click its box in the review column: a field opens in it. Your comment is a reply to someone else's change, or the comment on your own. Boxes sit level with their text, tied to it by dotted lines, in Visual and Raw; boxes that would crowd each other stack together, centered on all their text. To comment on untouched text, highlight it — or, with no selection, press the highlight button to anchor a comment at the caret.
 
 **Track Changes** (the pencil) is on: whatever you type becomes Joe's addition, and whatever you delete stays, struck through, as Joe's deletion. Deleting from your own addition really deletes it. Spaces at either end of a change stay outside it, and when a deletion is accepted (or an addition rejected) the spacing around it is tidied: no doubled spaces, and no space left before punctuation or at the end of a paragraph. Turn Track Changes off to edit freely.
 
@@ -86,9 +86,9 @@ Undo and redo work across both views: an edit made in Raw can be undone in Visua
 
 ## A Longer Section
 
-Markdown was designed so that a document reads naturally as plain text, ++@@Claude.1794606300 Clarifies the point.@@long++ before it is ever rendered. Headings are lines that begin with hashes, emphasis is a pair of asterisks or underscores, and lists are just lines that start with a bullet or a number.
+Markdown was designed so that a document reads naturally as plain text, {++long++}{>>Claude 2026-11-13 15:45: Clarifies the point.<<} before it is ever rendered. Headings are lines that begin with hashes, emphasis is a pair of asterisks or underscores, and lists are just lines that start with a bullet or a number.
 
-That makes the raw text a ~~@@Claude.1794606360@@perfectly~~ good place to write. Some edits are simply easier there — rearranging lists, fixing a link's address, or cleaning up nested formatting — while others, like reading a long passage or checking how a section flows, are easier in the rendered view.
+That makes the raw text a {--perfectly--}{>>Claude 2026-11-13 15:46<<} good place to write. Some edits are simply easier there — rearranging lists, fixing a link's address, or cleaning up nested formatting — while others, like reading a long passage or checking how a section flows, are easier in the rendered view.
 
 This section is here mostly to give the page some length, so that scrolling and switching views can be tried out on a document taller than the window. Scroll to the middle of it, switch views, and the paragraph you were reading should stay where it was.
 

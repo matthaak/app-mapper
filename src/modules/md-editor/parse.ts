@@ -6,34 +6,45 @@
  * isn't an item continues the item above, as a line break); GFM tables (a header
  * row, a `| --- | :---: |` delimiter row setting each column's alignment, then body rows;
  * `\|` is a literal pipe in a cell); **bold**, *italic* /
- * _italic_, `code`, [links](url), ![images](src "title"); and three extras — ^^highlight^^,
- * ~~deletion~~ and ++addition++ — each of which may start with attributions (see notes.ts).
+ * _italic_, `code`, [links](url), ![images](src "title"); and review marks in CriticMarkup —
+ * {==highlight==}, {--deletion--} and {++addition++}, each followed by its notes, and
+ * {>>comments<<} anchored at a point (see notes.ts).
+ *
+ * Code is literal but for review marks: there a mark must have notes signed with an author and
+ * date, and it ends at the first closing delimiter they follow (`{++i++}{>>Matt 2026-11-18<<}`
+ * adds `i++`), so code that happens to look like markup stays code.
  *
  * Besides the HTML, `render` reports:
  * - `plain`: for each character of the rendered DOM text (in document order), its index in the
  *   markdown. The HTML contains no whitespace between tags, so the DOM's text nodes hold exactly
  *   these characters. This is what carries a caret or selection from Raw to Visual exactly.
- * - `marks`: where the highlight/strike/underline spans sit in the markdown, delimiters
- *   included, so the Raw view styles exactly what the Visual view styles; and their notes.
+ * - `marks`: where the marks sit in the markdown, delimiters and notes included, so the Raw
+ *   view styles exactly what the Visual view styles; and their notes.
  *
  * In the HTML, each mark element carries `data-mark` (its index in `marks`). Its first element
  * also carries the notes' source text in `data-notes` (the notes themselves are not shown), so
- * the serializer can write them back after the Visual view is edited.
+ * the serializer can write them back after the Visual view is edited. An anchored comment is an
+ * empty `span.md-anchor`, with its notes.
  */
-import { THREAD, noteOf, threadNotes, verdictOf, type Note, type Verdict } from './notes';
+import { noteOf, notesAt, verdictOf, type Note, type Verdict } from './notes';
 
-export type MarkKind = 'highlight' | 'strike' | 'underline';
+/** A mark: a highlight, a deletion, an addition, or a comment anchored at a point. */
+export type MarkKind = 'highlight' | 'strike' | 'underline' | 'comment';
 
 export interface Mark {
   kind: MarkKind;
-  /** Markdown index of the opening delimiter. */
+  /** Markdown index of the opening delimiter (an anchored comment's first `{>>`). */
   from: number;
-  /** Markdown index just past the closing delimiter. */
+  /** Markdown index just past its last note (or, with none, its closing delimiter). */
   to: number;
-  /** Attributions at the start of the section: its author first, then replies. */
+  /** Its notes, after its closing delimiter: its author first, then replies. */
   notes: Note[];
-  /** Markdown index where the section's text starts (after the opening delimiter and notes). */
+  /** Markdown index where its text starts, after the opening delimiter (a comment's: `from`). */
   body: number;
+  /** Markdown index where its text ends, at the closing delimiter (a comment's: `from`). */
+  end: number;
+  /** In code. */
+  code: boolean;
   /** An addition or deletion resolved in its thread (see verdictOf); kept, with its history. */
   verdict: Verdict | null;
 }
@@ -329,14 +340,14 @@ function blocks(src: Src, out: Out): void {
 }
 
 function code(body: Src[], out: Out): void {
-  out.html.push('<pre><code>');
+  // Code is never spell-checked (in Visual; see the editor's `spellcheck`).
+  out.html.push('<pre spellcheck="false"><code>');
   body.forEach((l, j) => {
     if (j > 0) {
       out.html.push('\n');
       out.plain.push(body[j - 1].at[body[j - 1].text.length]);
     }
-    out.html.push(escapeHtml(l.text));
-    for (let k = 0; k < l.text.length; k++) out.plain.push(l.at[k]);
+    inline(l, out, true);
     out.code.push([l.at[0], l.at[l.text.length]]);
   });
   out.html.push('</code></pre>');
@@ -361,21 +372,29 @@ const IMAGE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
 const LINK = /\[([^\]]+)\]\(([^)\s]+)\)/g;
 const SPACE = /\s/;
 const WORD = /[\p{L}\p{N}]/u;
+/** The marks: each one's delimiter (`{==` … `==}`), kind and tag. */
+const MARKS: [string, MarkKind, string][] = [
+  ['==', 'highlight', 'mark'],
+  ['--', 'strike', 'del'],
+  ['++', 'underline', 'u'],
+];
 
 /** Pairs of delimiters, in parse order (longer runs first so `***` isn't read as `**` + `*`). */
-const PAIRS: [string, string, string, MarkKind?][] = [
+const PAIRS: [string, string, string][] = [
   ['***', '<strong><em>', '</em></strong>'],
   ['___', '<strong><em>', '</em></strong>'],
   ['**', '<strong>', '</strong>'],
   ['__', '<strong>', '</strong>'],
-  ['^^', '<mark>', '</mark>', 'highlight'],
-  ['~~', '<del>', '</del>', 'strike'],
-  ['++', '<u>', '</u>', 'underline'],
   ['*', '<em>', '</em>'],
   ['_', '<em>', '</em>'],
 ];
 
-function inline(s: Src, out: Out): void {
+type Notes = ReturnType<typeof notesAt>;
+
+/**
+ * Inline markdown. A `codeLine` (a line of a code block) is literal but for its review marks.
+ */
+function inline(s: Src, out: Out, codeLine = false): void {
   const t = s.text;
   const n = t.length;
   const flag = new Uint8Array(n);
@@ -392,97 +411,180 @@ function inline(s: Src, out: Out): void {
     if (start < end) spans.push({ start, end, open, close, reopen });
   };
 
-  // Code spans protect their contents from all other parsing.
-  for (let i = 0; i < n; i++) {
+  /** Records the mark of `kind` from `t[k]` whose closing delimiter is at `j`, then its notes. */
+  const markAt = (k: number, j: number, r: Notes, kind: MarkKind, tag: string, code: boolean) => {
+    hide(k, 3);
+    hide(j, r.end - j);
+    const html = record(kind, s.at[k], s.at[r.end - 1] + 1, s.at[k + 3], s.at[j], lead(r), t.slice(j + 3, r.end), tag, code);
+    span(k + 3, j, html.open, `</${tag}>`, html.reopen);
+  };
+  /** Records the comment anchored at `t[k]`: notes after no mark. */
+  const anchorAt = (k: number, r: Notes, code: boolean) => {
+    hide(k, r.end - k);
+    const at = s.at[k];
+    const html = record('comment', at, s.at[r.end - 1] + 1, at, at, lead(r), t.slice(k, r.end), 'span', code);
+    inserts.set(k, `${inserts.get(k) ?? ''}${html.open}</span>`);
+  };
+  const lead = (r: Notes) => r.notes.map((x) => noteOf(x.text, s.at[x.at], x.text ? s.at[x.at + x.text.length - 1] + 1 : s.at[x.at]));
+
+  /**
+   * The review marks in code text [a, b) (a code span's, or a code line's), nested ones too: a
+   * mark ends at the first closing delimiter that signed notes follow; signed notes after no
+   * mark are an anchored comment. Anything else is code.
+   */
+  const codeMarks = (a: number, b: number, inSpan: boolean) => {
+    for (let k = a; k < b; k++) {
+      if (t.startsWith('{>>', k)) {
+        const r = notesAt(t, k, true);
+        if (r.notes.length && r.end <= b) {
+          anchorAt(k, r, true);
+          k = r.end - 1;
+        }
+        continue;
+      }
+      const m = t[k] === '{' ? MARKS.find(([d]) => t.startsWith(d, k + 1)) : undefined;
+      if (!m) continue;
+      const close = `${m[0]}}`;
+      let found: [number, Notes] | null = null;
+      for (let j = k + 4; j + 3 <= b && t[j] !== '\n' && !(inSpan && t[j] === '`'); j++) {
+        if (!t.startsWith(close, j)) continue;
+        const r = notesAt(t, j + 3, true);
+        if (r.notes.length && r.end <= b) {
+          found = [j, r];
+          break;
+        }
+      }
+      if (!found) continue;
+      const [j, r] = found;
+      markAt(k, j, r, m[1], m[2], true);
+      codeMarks(k + 3, j, inSpan);
+      k = r.end - 1;
+    }
+  };
+
+  if (codeLine) {
+    flag.fill(LOCKED);
+    codeMarks(0, n, false);
+  }
+
+  // Code spans protect their contents from all other parsing (but their review marks).
+  for (let i = 0; i < n && !codeLine; i++) {
+    // Notes aren't code (a comment may hold a backtick).
+    if (t.startsWith('{>>', i)) {
+      const r = notesAt(t, i);
+      if (r.notes.length) i = r.end - 1;
+      continue;
+    }
     if (t[i] !== '`') continue;
-    const j = t.indexOf('`', i + 1);
-    if (j === -1) break;
+    // The closing backtick, past any notes (their comments may hold backticks too).
+    let j = i + 1;
+    for (; j < n && t[j] !== '`'; j++) {
+      if (!t.startsWith('{>>', j)) continue;
+      const r = notesAt(t, j, true);
+      if (r.notes.length) j = r.end - 1;
+    }
+    if (j >= n) break;
     hide(i, 1);
     hide(j, 1);
     flag.fill(LOCKED, i + 1, j);
-    span(i + 1, j, '<code>', '</code>');
+    span(i + 1, j, '<code spellcheck="false">', '</code>');
     out.code.push([s.at[i + 1], j > i + 1 ? s.at[j - 1] + 1 : s.at[i + 1]]);
+    codeMarks(i + 1, j, true);
     i = j;
   }
 
-  // Attribution threads are never parsed inside (a comment may hold `*` or `_`). Those leading a
-  // mark are hidden below; any others stay as literal text.
-  const notes = new Map<number, RegExpMatchArray>();
-  for (const m of t.matchAll(THREAD)) {
-    if (!free(m.index, m[0].length)) continue;
-    flag.fill(LOCKED, m.index, m.index + m[0].length);
-    notes.set(m.index, m);
-  }
+  if (!codeLine) parse();
 
-  for (const m of t.matchAll(IMAGE)) {
-    const i = m.index;
-    if (!free(i, m[0].length)) continue;
-    hide(i, m[0].length);
-    const title = m[3] ? ` title="${escapeHtml(m[3])}"` : '';
-    inserts.set(i, `${inserts.get(i) ?? ''}<img src="${escapeHtml(m[2])}" alt="${escapeHtml(m[1])}"${title}>`);
-  }
+  /** Notes, images, links, review marks and emphasis (not in a code line). */
+  function parse() {
+    // Notes are never parsed inside (a comment may hold `*` or `_`). Those after a mark are
+    // its; the rest are anchored comments.
+    const runs = new Map<number, Notes>();
+    for (let i = 0; i < n; i++) {
+      if (!t.startsWith('{>>', i) || !free(i, 3)) continue;
+      const r = notesAt(t, i);
+      if (!r.notes.length) continue;
+      flag.fill(LOCKED, i, r.end);
+      runs.set(i, r);
+      i = r.end - 1;
+    }
 
-  for (const m of t.matchAll(LINK)) {
-    const i = m.index;
-    const textEnd = i + 1 + m[1].length;
-    const end = i + m[0].length;
-    if (!free(i, 1) || !free(textEnd, end - textEnd)) continue;
-    hide(i, 1);
-    hide(textEnd, end - textEnd);
-    span(i + 1, textEnd, `<a href="${escapeHtml(m[2])}" target="_blank" rel="noopener">`, '</a>');
-  }
+    for (const m of t.matchAll(IMAGE)) {
+      const i = m.index;
+      if (!free(i, m[0].length)) continue;
+      hide(i, m[0].length);
+      const title = m[3] ? ` title="${escapeHtml(m[3])}"` : '';
+      inserts.set(i, `${inserts.get(i) ?? ''}<img src="${escapeHtml(m[2])}" alt="${escapeHtml(m[1])}"${title}>`);
+    }
 
-  // Emphasis: an opener must be followed by non-space, a closer preceded by non-space (so
-  // "C++ and C++" or "2 * 3 * 4" stay literal), and the pair must enclose something. The marks
-  // (^^ ~~ ++) may close after a space: a tracked change can end in one.
-  for (const [d, open, close, kind] of PAIRS) {
-    const len = d.length;
-    let opener = -1;
-    for (let i = 0; i + len <= n; i++) {
-      if (!t.startsWith(d, i) || !free(i, len)) continue;
-      const before = t[i - 1];
-      const after = t[i + len];
-      const canOpen = after !== undefined && !SPACE.test(after);
-      const canClose = before !== undefined && (!!kind || !SPACE.test(before));
-      const intraword = d === '_' && canOpen && canClose && WORD.test(before) && WORD.test(after);
-      if (!intraword) {
-        if (opener !== -1 && canClose && i > opener + len) {
-          hide(opener, len);
-          hide(i, len);
-          if (kind) {
-            const tag = mark(opener + len, i, kind, s.at[opener], s.at[i + len - 1] + 1, open);
-            span(opener + len, i, tag.open, close, tag.reopen);
-          } else {
-            span(opener + len, i, open, close);
-          }
-          opener = -1;
-        } else if (canOpen) {
-          opener = i;
-        }
+    for (const m of t.matchAll(LINK)) {
+      const i = m.index;
+      const textEnd = i + 1 + m[1].length;
+      const end = i + m[0].length;
+      if (!free(i, 1) || !free(textEnd, end - textEnd)) continue;
+      hide(i, 1);
+      hide(textEnd, end - textEnd);
+      span(i + 1, textEnd, `<a href="${escapeHtml(m[2])}" target="_blank" rel="noopener">`, '</a>');
+    }
+
+    // Review marks: each ends at its first closing delimiter, on its line.
+    for (const [d, kind, tag] of MARKS) {
+      const open = `{${d}`;
+      const close = `${d}}`;
+      for (let i = 0; i + 3 <= n; i++) {
+        if (!t.startsWith(open, i) || !free(i, 3)) continue;
+        let j = i + 4;
+        while (j + 3 <= n && t[j - 1] !== '\n' && !(t.startsWith(close, j) && free(j, 3))) j++;
+        if (j + 3 > n || t[j - 1] === '\n') continue;
+        const r = runs.get(j + 3) ?? { notes: [], end: j + 3 };
+        runs.delete(j + 3);
+        markAt(i, j, r, kind, tag, false);
+        i = r.end - 1;
       }
-      i += len - 1;
+    }
+    for (const [i, r] of runs) anchorAt(i, r, false);
+
+    // Emphasis: an opener must be followed by non-space, a closer preceded by non-space (so
+    // "2 * 3 * 4" stays literal), and the pair must enclose something.
+    for (const [d, open, close] of PAIRS) {
+      const len = d.length;
+      let opener = -1;
+      for (let i = 0; i + len <= n; i++) {
+        if (!t.startsWith(d, i) || !free(i, len)) continue;
+        const before = t[i - 1];
+        const after = t[i + len];
+        const canOpen = after !== undefined && !SPACE.test(after);
+        const canClose = before !== undefined && !SPACE.test(before);
+        const intraword = d === '_' && canOpen && canClose && WORD.test(before) && WORD.test(after);
+        if (!intraword) {
+          if (opener !== -1 && canClose && i > opener + len) {
+            hide(opener, len);
+            hide(i, len);
+            span(opener + len, i, open, close);
+            opener = -1;
+          } else if (canOpen) {
+            opener = i;
+          }
+        }
+        i += len - 1;
+      }
     }
   }
 
-  /** Records a mark whose text starts at `a` (before b), taking the notes that lead it. */
-  function mark(a: number, b: number, kind: MarkKind, from: number, to: number, open: string) {
-    const lead: Note[] = [];
-    let j = a;
-    // Usually one thread; the older form (a thread per note) gives several in a row.
-    for (let m = notes.get(j); m && j + m[0].length <= b; m = notes.get(j)) {
-      for (const n of threadNotes(m[0])) lead.push(noteOf(n.text, s.at[j + n.at], s.at[j + n.at + n.text.length - 1] + 1));
-      hide(j, m[0].length);
-      j += m[0].length;
-    }
-    const verdict = kind === 'highlight' ? null : verdictOf(lead);
-    const index = out.marks.push({ kind, from, to, notes: lead, body: s.at[j], verdict }) - 1;
+  /**
+   * Adds a mark to `out.marks`, `source` being its notes' text; returns its opening tag (with
+   * its notes, for the serializer) and the tag to reopen it with.
+   */
+  function record(kind: MarkKind, from: number, to: number, body: number, end: number, notes: Note[], source: string, tag: string, code: boolean) {
+    const verdict = kind === 'highlight' || kind === 'comment' ? null : verdictOf(notes);
+    const index = out.marks.push({ kind, from, to, notes, body, end, code, verdict }) - 1;
     // A resolved change shows as its outcome: an accepted addition or rejected deletion as plain
     // text; the text an accepted deletion or rejected addition took out, not at all (still there
     // for the source map and the serializer, but not to be edited).
-    const cls = [lead.length ? 'noted' : '', verdict ?? ''].filter(Boolean).join(' ');
-    const gone = verdict === (kind === 'strike' ? 'accepted' : 'rejected');
-    const base = `${open.slice(0, -1)} data-mark="${index}"${cls ? ` class="${cls}"` : ''}${gone ? ' contenteditable="false"' : ''}`;
-    return { open: lead.length ? `${base} data-notes="${escapeHtml(t.slice(a, j))}">` : `${base}>`, reopen: `${base}>` };
+    const cls = [kind === 'comment' ? 'md-anchor' : '', notes.length ? 'noted' : '', verdict ?? ''].filter(Boolean).join(' ');
+    const gone = kind === 'comment' || verdict === (kind === 'strike' ? 'accepted' : 'rejected');
+    const base = `<${tag} data-mark="${index}"${cls ? ` class="${cls}"` : ''}${gone ? ' contenteditable="false"' : ''}`;
+    return { open: notes.length ? `${base} data-notes="${escapeHtml(source)}">` : `${base}>`, reopen: `${base}>` };
   }
 
   // Emit, keeping tags well nested: when a span closes under others, close those too and

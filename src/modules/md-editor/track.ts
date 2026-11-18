@@ -1,7 +1,7 @@
 /**
  * Track changes: typing and deleting as markdown transforms that record the edit instead of
- * just making it. Inserted text becomes an addition (`++@@user.time@@text++`); deleted text is
- * kept, as a deletion (`~~@@user.time@@text~~`).
+ * just making it. Inserted text becomes an addition (`{++text++}{>>user 2026-11-18 13:55<<}`);
+ * deleted text is kept, as a deletion (`{--text--}{>>user 2026-11-18 13:55<<}`).
  *
  * Like a word processor:
  * - typing inside (or right at either end of) the user's own addition just extends it, spaces
@@ -11,21 +11,21 @@
  * - text already deleted is skipped over, and typing inside a deletion goes after it;
  * - typing inside someone else's addition splits it around the new one.
  *
- * Not tracked: code (where markup would be literal), and edits with no visible text — the
- * paragraph and line breaks that join or split blocks, or markup typed in Raw.
+ * Code is tracked too, the same way (a change there must be signed, which these always are).
+ *
+ * Not tracked: edits with no visible text — the paragraph and line breaks that join or split
+ * blocks (in code, the line breaks that join or split its lines), or markup typed in Raw.
  */
-import { LINE_PREFIX, removal, shownChars, type Edit } from './actions';
+import { LINE_PREFIX, markRemoval, shownChars, type Edit } from './actions';
 import { makeNote } from './notes';
 import { render, type Mark } from './parse';
 
-const D = 2; // ++ ~~
-
 /**
  * Whether the text is under review: it has additions or deletions, or comments (on any of
- * those, or on a highlight). A plain highlight with no comment doesn't count.
+ * those, on a highlight, or anchored). A plain highlight with no comment doesn't count.
  */
 export function hasRevisions(md: string): boolean {
-  return render(md).marks.some((m) => m.kind !== 'highlight' || m.notes.some((n) => !!n.comment));
+  return render(md).marks.some((m) => m.kind === 'strike' || m.kind === 'underline' || m.notes.some((n) => !!n.comment));
 }
 
 /**
@@ -45,28 +45,41 @@ interface Context {
   visible: Uint8Array;
   /** Whether each markdown character is code text. */
   code: Uint8Array;
+  /** Whether text inserted at each position goes into code (a code text's end included). */
+  codeAt: Uint8Array;
 }
 
 function context(md: string): Context {
   const r = render(md);
   const visible = shownChars(md, r.plain);
   const code = new Uint8Array(md.length + 1);
-  for (const [from, to] of r.code) code.fill(1, from, to);
-  return { marks: r.marks, visible, code };
+  const codeAt = new Uint8Array(md.length + 1);
+  for (const [from, to] of r.code) {
+    code.fill(1, from, to);
+    codeAt.fill(1, from, to + 1);
+  }
+  return { marks: r.marks, visible, code, codeAt };
 }
 
 const authoredBy = (m: Mark, user: string) => m.notes[0]?.author === user;
 /** Whether index `i` is in a mark's text (past its notes, before its closing delimiter). */
-const inText = (m: Mark, i: number) => m.body <= i && i < m.to - D;
+const inText = (m: Mark, i: number) => m.body <= i && i < m.end;
 
 function trackDelete(md: string, a: number, b: number, user: string, backward: boolean): Edit {
   if (a >= b) return { md, anchor: a, focus: a };
   const { marks, visible, code } = context(md);
 
-  // Nothing visible (a paragraph break, or markup in Raw): a plain edit.
+  // A line break in code is visible text, but isn't tracked: joining code lines is a plain edit.
+  const text = (i: number) => !!visible[i] && md[i] !== '\n';
   let shown = false;
-  for (let i = a; i < b && !shown; i++) shown = !!visible[i];
-  if (!shown) return joinLines(md, a, b);
+  for (let i = a; i < b && !shown; i++) shown = text(i);
+  if (!shown) {
+    let out = md;
+    for (let i = b - 1; i >= a; i--) if (visible[i]) out = out.slice(0, i) + out.slice(i + 1);
+    if (out !== md) return { md: out, anchor: a, focus: a };
+    // Nothing visible (a paragraph break, or markup in Raw): a plain edit.
+    return joinLines(md, a, b);
+  }
 
   const mine = marks.filter((m) => m.kind === 'underline' && authoredBy(m, user));
   const deleted = marks.filter((m) => m.kind === 'strike');
@@ -75,18 +88,27 @@ function trackDelete(md: string, a: number, b: number, user: string, backward: b
   const rw = new Rewrite(md);
 
   // Runs of visible text (spaces too) become deletions, merging into the user's deletions they
-  // touch on either side (keeping that deletion's attributions).
+  // touch on either side (keeping the notes of the one on the left, else the right).
   const strike = (x: number, y: number) => {
+    // In code a deletion must be signed: with nobody to sign it, the text just goes.
+    if (code[x] && !note) return rw.remove(x, y);
     const left = myDeletions.find((m) => m.to === x);
     const right = myDeletions.find((m) => m.from === y);
-    if (left) rw.remove(left.to - D, left.to);
-    else rw.insert(x, `~~${right ? md.slice(right.from + D, right.body) : note}`);
-    if (right) rw.remove(right.from, right.body);
-    else rw.insert(y, '~~');
+    // The merged deletion's end: the left one's, notes and all, else a new one.
+    const close = left ? md.slice(left.end, left.to) : `--}${note}`;
+    if (left) rw.remove(left.end, left.to);
+    else rw.insert(x, '{--');
+    if (!right) return rw.insert(y, close);
+    rw.remove(right.from, right.body);
+    if (left) {
+      rw.remove(right.end, right.to);
+      rw.insert(right.to, close);
+    }
   };
   let run = -1;
   for (let i = a; i < b; i++) {
-    const kind = !visible[i] ? 'markup' : code[i] || mine.some((m) => inText(m, i)) ? 'remove' : deleted.some((m) => inText(m, i)) ? 'skip' : 'strike';
+    // (A line break in code stays: a deletion can't hold one.)
+    const kind = !text(i) ? 'markup' : mine.some((m) => inText(m, i)) ? 'remove' : deleted.some((m) => inText(m, i)) ? 'skip' : 'strike';
     if (kind === 'strike') {
       if (run < 0) run = i;
       continue;
@@ -101,8 +123,8 @@ function trackDelete(md: string, a: number, b: number, user: string, backward: b
   for (const m of mine) {
     if (m.to <= a || m.from >= b) continue;
     let empty = true;
-    for (let i = m.body; i < m.to - D && empty; i++) empty = !visible[i] || rw.removed(i);
-    if (empty) for (const [x, y] of removal(md, visible, m.from, m.to)) rw.remove(x, y);
+    for (let i = m.body; i < m.end && empty; i++) empty = !visible[i] || rw.removed(i);
+    if (empty) for (const [x, y] of markRemoval(md, visible, m)) rw.remove(x, y);
   }
 
   const { md: out, map } = rw.apply();
@@ -113,7 +135,7 @@ function trackDelete(md: string, a: number, b: number, user: string, backward: b
 /**
  * Deletes a range with no visible text — in Visual, the break between two blocks. Only the
  * line breaks and the next line's block markers go: inline delimiters on either side (an
- * addition's closing `++`, a bold's `**`) stay, so formatting and changes stay intact.
+ * addition's closing `++}`, a bold's `**`) stay, so formatting and changes stay intact.
  */
 function joinLines(md: string, a: number, b: number): Edit {
   const first = md.indexOf('\n', a);
@@ -128,19 +150,21 @@ function joinLines(md: string, a: number, b: number): Edit {
 function trackInsert(md: string, p: number, text: string, user: string): Edit {
   const plain = (at: number): Edit => ({ md: md.slice(0, at) + text + md.slice(at), anchor: at + text.length, focus: at + text.length });
   if (!text) return { md, anchor: p, focus: p };
-  const { marks, code } = context(md);
+  const { marks, codeAt } = context(md);
 
-  // In code, or (in Raw) inside a delimiter or an attribution: plain text.
-  if (code[p] || (p > 0 && code[p - 1] && md[p] === '`')) return plain(p);
-  if (marks.some((m) => (m.from < p && p < m.body) || (m.to - D < p && p < m.to))) return plain(p);
+  // (In Raw) inside a delimiter or an attribution: plain text.
+  if (marks.some((m) => (m.from < p && p < m.body) || (m.end < p && p < m.to))) return plain(p);
 
   const note = makeNote(user);
-  const addition = (s: string) => `++${note}${s}++`;
+  // In code an addition must be signed: with nobody to sign it, plain text.
+  if (codeAt[p] && !note) return plain(p);
+  const close = `++}${note}`;
+  const addition = (s: string) => `{++${s}${close}`;
   const wrap = (at: number, before = '', after = ''): Edit => {
     // Each line of the text is its own addition (a line break can't be inside one).
     const lines = text.split('\n');
     const ins = before + lines.map((l) => (l ? addition(l) : '')).join('\n') + after;
-    const caret = at + ins.length - after.length - (lines[lines.length - 1] ? D : 0);
+    const caret = at + ins.length - after.length - (lines[lines.length - 1] ? close.length : 0);
     return { md: md.slice(0, at) + ins + md.slice(at), anchor: caret, focus: caret };
   };
 
@@ -152,16 +176,17 @@ function trackInsert(md: string, p: number, text: string, user: string): Edit {
   // Inside, or at either end of, the user's own addition: extend it.
   const own = marks.filter((m) => m.kind === 'underline' && authoredBy(m, user));
   const mine = own.find((m) => m.from <= p && p <= m.to);
-  if (mine) return plain(Math.min(Math.max(p, mine.body), mine.to - D));
+  if (mine) return plain(Math.min(Math.max(p, mine.body), mine.end));
 
   // Inside someone else's addition: before or after it at its ends, else split it around ours.
-  const other = marks.find((m) => m.kind === 'underline' && m.body <= p && p <= m.to - D);
+  const other = marks.find((m) => m.kind === 'underline' && m.body <= p && p <= m.end);
   if (other) {
     if (p === other.body) return wrap(other.from);
-    if (p === other.to - D) return wrap(other.to);
+    if (p === other.end) return wrap(other.to);
+    // Its first part is signed like it (its notes stay with the last).
     const first = other.notes[0];
-    const tail = first ? `@@${first.author}${first.time !== undefined ? `.${first.time}` : ''}@@` : '';
-    return wrap(p, '++', `++${tail}`);
+    const sign = first?.author && first.stamp ? `{>>${first.author} ${first.stamp}<<}` : '';
+    return wrap(p, `++}${sign}`, '{++');
   }
 
   return wrap(p);

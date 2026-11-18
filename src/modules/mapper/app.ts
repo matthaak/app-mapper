@@ -28,11 +28,13 @@ const KEY = {
   last: 'app-mapper.last-project',
   /** View ▸ Use Editor Windows is on (off by default: files open in the dock). */
   windows: 'app-mapper.editor-windows',
-  /** View ▸ Theme: 'modern', or none for Classic. */
+  /** View ▸ Theme: 'classic', or none for Modern (the default). */
   theme: 'app-mapper.theme',
   view: (location: string) => `app-mapper.view:${location}`,
   /** A file's Review Mode, once the user set it ('1' on, '0' off). */
   annotations: (project: string, path: string) => `app-mapper.annotations:${project}:${path}`,
+  /** Show spelling errors in the editors: '0' when turned off (on by default). */
+  spelling: 'app-mapper.spelling',
   /** The skill version whose update the user declined for a project (asked once per version). */
   agentsDeclined: (project: string) => `app-mapper.agents-declined:${project}`,
 };
@@ -109,7 +111,7 @@ export class MapperApp {
   private agents: AgentSetup | null = null;
 
   constructor(host: HTMLElement) {
-    if (storage(KEY.theme) === 'modern') setNxTheme('modern');
+    setNxTheme(storage(KEY.theme) === 'classic' ? 'classic' : 'modern');
     this.desk = new NxDesktop().mount(host);
     this.desk.el.classList.add('mapper');
     this.layer = h('div', { className: 'mapper-canvas' });
@@ -868,6 +870,12 @@ export class MapperApp {
       onAnnotationsChange: (on: boolean, manual: boolean) => {
         if (manual || storage(annotationsKey) !== null) storage(annotationsKey, on ? '1' : '0');
       },
+      spellcheck: storage(KEY.spelling) !== '0',
+      // One setting for every editor: the others follow.
+      onSpellcheckChange: (on: boolean) => {
+        storage(KEY.spelling, on ? '1' : '0');
+        for (const e of this.editors.values()) e.editor.spellcheck = on;
+      },
       onChange: (md: string) => this.edited(path, md),
       onSave: () => void this.saveDoc(path),
       onClose: () => this.editors.delete(path),
@@ -897,7 +905,7 @@ export class MapperApp {
   /** View ▸ Theme: the whole app in Classic (NeXT) or Modern dress, remembered. */
   private setTheme(theme: NxTheme): void {
     setNxTheme(theme);
-    storage(KEY.theme, theme === 'modern' ? 'modern' : null);
+    storage(KEY.theme, theme === 'classic' ? 'classic' : null);
     this.menuChanged();
     // The menu's width (in the browser) bounds the canvas's viewable area.
     this.layoutDock();

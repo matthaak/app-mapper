@@ -17,8 +17,8 @@
  * Links are relative to the file's folder; a leading `/` means the project root. Items without
  * a link to a .md file are ignored, so the section can hold other notes too.
  *
- * Tracked-change markup from the MD Editor (++added++, ~~deleted~~, ^^highlighted^^ and their
- * @@…@@ threads) is read as if the changes were accepted.
+ * Review markup from the MD Editor (CriticMarkup: {++added++}, {--deleted--}, {==highlighted==}
+ * and {>>comments<<}) is read as if the changes were accepted.
  */
 
 export interface DocDependency {
@@ -39,8 +39,13 @@ const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const LINK = /(?<!!)\[((?:[^\]\\]|\\.)*)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/;
-/** An MD Editor attribution thread, `@@note@@note@@` (see md-editor/notes.ts). */
-const THREAD = /@@(?:\w+(?:\.\d+)?(?: (?:(?!@@|\^\^|~~|\+\+)[^\n])*?)?@@)+/g;
+/** MD Editor review markup read as accepted: notes dropped, deletions dropped, the rest kept. */
+const accepted = (s: string) =>
+  s
+    .replace(/\{>>[^\n]*?<<\}/g, '')
+    .replace(/\{--[^\n]*?--\}/g, '')
+    .replace(/\{\+\+([^\n]*?)\+\+\}/g, '$1')
+    .replace(/\{==([^\n]*?)==\}/g, '$1');
 
 // ---------------------------------------------------------------------------------------
 // Paths
@@ -90,11 +95,7 @@ export function relativeLink(from: string, to: string): string {
 
 /** Plain text of inline markdown: formatting dropped, tracked changes as if accepted. */
 export function plainText(s: string): string {
-  return s
-    .replace(THREAD, '')
-    .replace(/~~[^\n]*?~~/g, '')
-    .replace(/\+\+([^\n]*?)\+\+/g, '$1')
-    .replace(/\^\^([^\n]*?)\^\^/g, '$1')
+  return accepted(s)
     .replace(/!?\[((?:[^\]\\]|\\.)*)\]\([^)]*\)/g, '$1')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/(\*\*|__)(.+?)\1/g, '$2')
@@ -186,7 +187,7 @@ function section(md: string, path: string): { all: string[]; section: Section | 
 
 /** An item's target and label (text after the link, or before it if there is none after). */
 function parseItem(text: string, path: string): { target: string; label: string } | null {
-  const clean = text.replace(THREAD, '').replace(/~~[^\n]*?~~/g, '').replace(/\+\+|\^\^/g, '');
+  const clean = accepted(text);
   const m = LINK.exec(clean);
   if (!m) return null;
   const target = resolveLink(path, m[2]);
