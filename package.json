@@ -4,6 +4,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Maps an application’s architecture from its Markdown files.",
+  "license": "MIT",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
