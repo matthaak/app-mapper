@@ -1,0 +1,16 @@
+# Widgets
+
+The app's own UI kit (`src/modules/widgets/`): NeXTSTEP-style widgets in plain DOM, with no framework. Gallery at `/widgets.html`, laid out like an OPENSTEP workspace.
+
+## Pieces
+
+* **Base** — `Widget` (one root element, `mount`, `destroy`) and `h()` for creating elements; `NxWidget` adds the shared NeXT look. Helpers: `startDrag`, `momentary` (NeXT press-and-release buttons), `place` (fixed position and size) and `pin` (pinned to a parent's edges, so it follows a resizable window — as in the gallery's Mailboxes panel).
+* **Workspace** — `NxDesktop` (window stacking, the key window — a key panel is raised over page-wide overlays, to `KEY_PANEL_Z`, but stays under menus — miniaturized tiles), `NxWindow` (title bar, close and miniaturize buttons, resize bar; standard or panel; `frame` and `onFrameChange` let a host remember where it was left), `NxMenu` (vertical menus with tear-off submenus; items can ask `enabled` and `checked` whenever `NxMenu.validate()` runs, as NeXT's menu validation did; a submenu given as a function is remade as it opens and on validation; a menu too long for the space below it scrolls; `NxMenu.closeAttached()` closes popped-out submenus, leaving torn-off ones; `onMoved` reports where a menu was dragged), `NxTile` and `NxDock`.
+* **Controls** — `NxButton` (push, toggle, default with ⏎), `NxPopUpButton`, `NxSwitch` (check box), `NxTextField`, `NxLabel`, `NxSeparator`, `NxBox`, `NxCheckMatrix`, `NxClock`.
+* **Lists and views** — `NxScroller` and `NxScrollView` (scroller on the left; a theme can hide its arrows with `--nx-scroller-arrows: 0`; in Modern a scroll view scrolls natively, its scrollers hidden), `NxList` (rows as tall as the theme draws them), `NxBrowser` (column browser; `refresh` re-reads lazily loaded branches, `show` selects a path; a horizontal swipe or Shift-wheel scrolls the columns, settling on a column; selecting never moves them, except to slide one column over, in 250ms, when the newly opened column would be past the right edge), `NxTable`, `NxTextView`, `NxSplitView`, `NxTabs`, `NxPopover`, and `NxShelf` / `NxIconCell` / `NxPathView` for file-viewer layouts.
+
+## Rules
+
+* The widgets know nothing of the feature modules: the [Canvas](canvas.md), the [MD Editor](md-editor.md) and the [Mapper](mapper.md) may use them, never the reverse.
+* Their four-grey palette lives in `next/nx.css` under the `.nx` class, so it doesn't follow the app's light and dark theme.
+* **Themes** — `setNxTheme('classic' | 'modern')` (and `nxTheme()`) dresses the whole page: Classic is the NeXT look above; Modern (`next/modern.css`) is flat, light and rounded — white surfaces on a soft grey, hairline borders, one blue accent, the system font, title buttons as the platform draws them (circles at the left on macOS; on Windows, `data-os="windows"`, an X at the right that turns red under the pointer, with a minimize bar beside it), content scrolling natively (the system's own scrollbars) and thin arrowless scrollers elsewhere. It sets `data-theme="modern"` on the root element, and every module keys its own Modern rules on that (sharing the `--m-*` tokens modern.css defines), so Classic's rules are never touched. Widgets that size themselves from their CSS (scrollers) are told by an `nx-theme` event.

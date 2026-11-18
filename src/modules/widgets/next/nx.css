@@ -1,0 +1,599 @@
+/*
+ * NeXTSTEP-style widgets. Every class is prefixed `nx-` (plus the shared `ui`).
+ * The four-grey palette below was sampled from an OPENSTEP 4.x screenshot.
+ */
+
+.ui[hidden] { display: none; }
+
+.nx {
+  --nx-black: #000;
+  --nx-dark: #505050;
+  --nx-light: #a0a0a0;
+  --nx-white: #fff;
+  /* A soft highlight edge: lighter than the face, quieter than white. */
+  --nx-soft: #c8c8c8;
+  --nx-desktop: #4f5170;
+  --nx-marked: #9fa3d2;
+  --nx-lcd: #1e2545;
+  --nx-lcd-on: #4fc163;
+  --nx-dot: #074879;
+  /* A scroller's trough: solid 50% grey. */
+  --nx-trough: #808080;
+  /* Raised bezel: white top-left, black + dark-grey bottom-right. */
+  --nx-raised: inset 1px 1px var(--nx-white), inset -1px -1px var(--nx-black), inset -2px -2px var(--nx-dark);
+  /* Pushed in: the raised bevel reversed. */
+  --nx-sunken: inset 1px 1px var(--nx-black), inset 2px 2px var(--nx-dark), inset -1px -1px var(--nx-soft);
+  /* Raised, but softer: for disabled controls. */
+  --nx-raised-dim: inset 1px 1px var(--nx-soft), inset -1px -1px #7a7a7a;
+
+  box-sizing: border-box;
+  font: 12px/1.15 Helvetica, 'Helvetica Neue', Arial, sans-serif;
+  color: var(--nx-black);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+.nx *,
+.nx *::before,
+.nx *::after { box-sizing: border-box; }
+.nx svg { display: block; flex: none; }
+.nx button { font: inherit; color: inherit; margin: 0; }
+
+/* ---- Desktop ---- */
+
+.nx-desktop {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--nx-desktop);
+}
+
+/* ---- Window ---- */
+
+.nx-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--nx-light);
+  border: 1px solid var(--nx-black);
+}
+.nx-titlebar {
+  position: relative;
+  flex: none;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 1px;
+  background: var(--nx-light);
+  border-bottom: 1px solid var(--nx-black);
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px -1px var(--nx-dark);
+  font-weight: bold;
+}
+.nx-window.main > .nx-titlebar { background: var(--nx-dark); color: var(--nx-white); }
+.nx-window.key > .nx-titlebar {
+  background: var(--nx-black);
+  color: var(--nx-white);
+  box-shadow: inset 1px 1px var(--nx-light), inset -1px -1px var(--nx-dark);
+}
+.nx-title { padding: 0 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nx-window-content { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+
+.nx-title-btn {
+  position: absolute;
+  top: 3px;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: none;
+  display: grid;
+  place-items: center;
+  background: var(--nx-light);
+  box-shadow: var(--nx-raised);
+}
+.nx-title-btn.close { right: 3px; }
+.nx-title-btn.mini { left: 3px; }
+.nx-title-btn.pressed { background: var(--nx-white); }
+.nx-mini-glyph {
+  width: 9px;
+  height: 8px;
+  background: var(--nx-light);
+  border: 1px solid;
+  border-color: var(--nx-white) var(--nx-black) var(--nx-black) var(--nx-white);
+  box-shadow: 1px 1px var(--nx-dark);
+}
+
+.nx-resizebar {
+  flex: none;
+  display: flex;
+  gap: 1px;
+  height: 9px;
+  background: var(--nx-black);
+  border-top: 1px solid var(--nx-black);
+}
+.nx-resizebar > div { background: var(--nx-light); box-shadow: inset 1px 1px var(--nx-white), inset -1px -1px var(--nx-dark); }
+.nx-resizebar > .sw { width: 28px; cursor: nesw-resize; }
+.nx-resizebar > .s { flex: 1; cursor: ns-resize; }
+.nx-resizebar > .se { width: 28px; cursor: nwse-resize; }
+
+/* ---- Menu ---- */
+
+.nx-menu {
+  position: absolute;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  min-width: 92px;
+  /* Too long for the space below it (max-height set by the menu): it scrolls, its title stays. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.nx-menu > * { flex: none; }
+.nx-menu-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 21px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px 1px 4px;
+  background: var(--nx-black);
+  color: var(--nx-white);
+  font-weight: bold;
+  white-space: nowrap;
+  /* Raised bevel on black: white top/left, dark-grey then black bottom/right. */
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px -1px var(--nx-dark);
+  border-bottom: 1px solid var(--nx-black);
+  border-right: 1px solid var(--nx-black);
+}
+.nx-menu-title .nx-title-btn { top: 2px; right: 3px; }
+.nx-menu-item {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 6px 1px 4px;
+  background: var(--nx-light);
+  box-shadow: var(--nx-raised);
+  white-space: nowrap;
+}
+.nx-menu-item > .label { flex: 1; }
+.nx-menu-item > .key { min-width: 7px; text-align: right; }
+.nx-menu-item.highlighted,
+.nx-menu-item.pressed { background: var(--nx-white); }
+.nx-menu-item.disabled { color: var(--nx-dark); }
+/* A check mark, in the key-equivalent slot, while the item is checked. */
+.nx-menu-item > .check { visibility: hidden; }
+.nx-menu-item.checked > .check { visibility: visible; }
+
+/* ---- Button ---- */
+
+.nx-button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 10px 1px;
+  border: none;
+  background: var(--nx-light);
+  box-shadow: var(--nx-raised);
+  white-space: nowrap;
+}
+/* Momentary press: the NeXT white highlight. */
+.nx-button.pressed { background: var(--nx-white); }
+/* A toggle that is on: pushed in. The bevel is reversed and the contents sit 1px down-right. */
+.nx-button.on { box-shadow: var(--nx-sunken); }
+.nx-button.on > * { transform: translate(1px, 1px); }
+.nx-button.on.pressed { background: var(--nx-white); }
+/* Disabled: a softer bevel (no black edge) and a faded label and icon. */
+.nx-button:disabled { color: var(--nx-dark); box-shadow: var(--nx-raised-dim); }
+.nx-button:disabled > .label { color: #7a7a7a; }
+.nx-button:disabled > .nx-button-icon,
+.nx-button:disabled > svg { opacity: 0.4; }
+.nx-button.on:disabled { box-shadow: inset 1px 1px #7a7a7a, inset -1px -1px var(--nx-soft); }
+.nx-button:focus-visible { outline: 1px dotted var(--nx-black); outline-offset: -4px; }
+.nx-button.has-key { justify-content: space-between; padding-left: 12px; padding-right: 8px; }
+.nx-button.has-key > .label { flex: 1; text-align: center; }
+.nx-button.above { flex-direction: column; justify-content: center; gap: 2px; height: auto; padding: 4px 6px 4px; }
+.nx-button.only { padding: 0; }
+
+/* ---- Switch (check box) ---- */
+
+.nx-switch { display: inline-flex; align-items: center; gap: 6px; height: 18px; padding: 0 2px; border: none; background: none; color: var(--nx-black); white-space: nowrap; }
+.nx-switch-box { flex: none; width: 15px; height: 15px; display: grid; place-items: center; background: var(--nx-light); box-shadow: var(--nx-raised); }
+.nx-switch-box > svg { visibility: hidden; }
+.nx-switch.on .nx-switch-box > svg { visibility: visible; }
+.nx-switch.pressed .nx-switch-box { background: var(--nx-white); }
+.nx-switch:disabled { color: #7a7a7a; }
+.nx-switch:disabled .nx-switch-box { box-shadow: var(--nx-raised-dim); }
+.nx-switch:disabled .nx-switch-box > svg { opacity: 0.4; }
+.nx-switch:focus-visible { outline: none; }
+.nx-switch:focus-visible > .label { outline: 1px dotted var(--nx-black); outline-offset: 1px; }
+.nx-button-icon { display: grid; place-items: center; }
+
+/* ---- Pop-up button ---- */
+
+.nx-popup { justify-content: space-between; gap: 10px; height: 22px; padding: 0 6px 1px 6px; text-align: left; }
+.nx-popup > .label { overflow: hidden; text-overflow: ellipsis; }
+.nx-popup-mark {
+  flex: none;
+  width: 11px;
+  height: 7px;
+  margin-right: 2px;
+  background: var(--nx-light);
+  border: 1px solid;
+  border-color: var(--nx-white) var(--nx-black) var(--nx-black) var(--nx-white);
+  box-shadow: 1px 1px var(--nx-dark);
+}
+.nx-popup-list {
+  position: fixed;
+  z-index: 20000;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--nx-black);
+  border-left: 1px solid var(--nx-black);
+}
+
+/* ---- Text field & label ---- */
+
+.nx-textfield { display: inline-flex; align-items: center; gap: 4px; }
+.nx-field {
+  flex: 1;
+  height: 22px;
+  min-width: 0;
+  border: 1px solid;
+  border-color: var(--nx-dark) var(--nx-white) var(--nx-white) var(--nx-dark);
+  background: var(--nx-white);
+}
+.nx-field > input {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0 3px 1px;
+  border: 1px solid;
+  border-color: var(--nx-black) var(--nx-light) var(--nx-light) var(--nx-black);
+  background: var(--nx-white);
+  color: var(--nx-black);
+  font: inherit;
+  outline: none;
+  caret-color: var(--nx-black);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.nx-field > input::selection { background: var(--nx-light); }
+.nx-field.disabled > input { color: var(--nx-dark); }
+.nx-label { white-space: nowrap; }
+.nx-label.disabled { color: var(--nx-dark); }
+.nx-label.bold { font-weight: bold; }
+.nx-label.small { font-size: 11px; }
+.nx-label.large { font-size: 16px; }
+.nx-etched { height: 2px; border-top: 1px solid var(--nx-dark); border-bottom: 1px solid var(--nx-white); }
+
+/* ---- Box ---- */
+
+.nx-box {
+  position: relative;
+  margin-top: 7px;
+  border: 1px solid var(--nx-dark);
+  box-shadow: inset 1px 1px var(--nx-white), 1px 1px var(--nx-white);
+}
+.nx-box-title {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 6px;
+  background: var(--nx-light);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.nx-box-body { position: relative; width: 100%; height: 100%; }
+
+/* ---- Scroller ---- */
+
+.nx-scroller { position: relative; flex: none; background: var(--nx-trough); }
+.nx-scroller.v { width: 18px; }
+.nx-scroller.h { height: 18px; }
+.nx-knob {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  background: var(--nx-light);
+  box-shadow: var(--nx-raised);
+}
+.nx-scroller.v .nx-knob { left: 1px; width: 16px; }
+.nx-scroller.h .nx-knob { top: 1px; height: 16px; }
+.nx-dimple {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nx-light);
+  box-shadow: inset 1px 1px var(--nx-dark), inset -1px -1px var(--nx-white);
+}
+.nx-scroller-arrows { position: absolute; display: flex; gap: 1px; }
+.nx-scroller.v .nx-scroller-arrows { left: 1px; bottom: 1px; flex-direction: column; }
+.nx-scroller.h .nx-scroller-arrows { left: 1px; top: 1px; }
+.nx-arrow {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  display: grid;
+  place-items: center;
+  background: var(--nx-light);
+  box-shadow: var(--nx-raised);
+}
+.nx-arrow.pressed { background: var(--nx-white); }
+.nx-scroller.empty > .nx-knob,
+.nx-scroller.empty > .nx-scroller-arrows { display: none; }
+
+/* ---- Scroll view ---- */
+
+.nx-scrollview { display: flex; min-width: 0; min-height: 0; }
+.nx-scrollview.bezel { border: 1px solid; border-color: var(--nx-dark) var(--nx-white) var(--nx-white) var(--nx-dark); }
+.nx-sv-frame { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.nx-scrollview.bezel > .nx-sv-frame { border: 1px solid; border-color: var(--nx-black) var(--nx-light) var(--nx-light) var(--nx-black); }
+.nx-scrollview.line > .nx-sv-frame { border: 1px solid var(--nx-black); }
+.nx-sv-row { flex: 1; min-height: 0; display: flex; }
+.nx-sv-row > .nx-scroller.v { border-right: 1px solid var(--nx-black); }
+.nx-sv-frame > .nx-scroller.h.bottom { border-top: 1px solid var(--nx-black); margin-left: 19px; }
+.nx-sv-frame > .nx-scroller.h.bottom.no-v { margin-left: 0; }
+.nx-sv-frame > .nx-scroller.h.top { border-bottom: 1px solid var(--nx-black); }
+.nx-viewport { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.nx-viewport > * { min-width: 100%; }
+.nx-scrollview.h-scroll .nx-viewport > * { width: max-content; }
+
+/* ---- List (matrix of cells) ---- */
+
+.nx-list { display: flex; min-width: 0; min-height: 0; outline: none; }
+.nx-list > .nx-scrollview { flex: 1; }
+.nx-cells { background: var(--nx-light); min-height: 100%; }
+.nx-cell {
+  height: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 5px 0 3px;
+  white-space: nowrap;
+}
+.nx-cell > .label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.nx-scrollview.h-scroll .nx-cell > .label { overflow: visible; }
+.nx-cell > .detail { font-size: 11px; }
+.nx-cell > .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--nx-dot); }
+.nx-cell.selected { background: var(--nx-white); }
+.nx-cell.disabled { color: var(--nx-dark); }
+
+/* ---- Browser ---- */
+
+.nx-browser { display: flex; flex-direction: column; border: 1px solid var(--nx-black); background: var(--nx-light); min-height: 0; }
+.nx-browser > .nx-scroller.h { border-bottom: 1px solid var(--nx-black); }
+/* The strip of columns slides inside .nx-columns (see NxBrowser); each column is a share of its width. */
+.nx-columns { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.nx-strip { flex: 0 0 100%; min-width: 0; display: flex; will-change: transform; }
+.nx-column { flex: 0 0 calc(100% / var(--nx-browser-columns, 3)); min-width: 0; display: flex; }
+.nx-column + .nx-column { border-left: 1px solid var(--nx-black); }
+.nx-column > .nx-list { flex: 1; }
+.nx-column.filler { background: var(--nx-light); }
+.nx-column.filler::before { content: ''; width: 19px; border-right: 1px solid var(--nx-black); background: var(--nx-trough); }
+
+/* ---- Icon cells, shelf, path view ---- */
+
+.nx-iconcell {
+  position: relative;
+  width: 84px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 2px 4px;
+  border-radius: 7px;
+}
+.nx-iconcell.selected { background: var(--nx-white); }
+.nx-iconcell-icon { width: 48px; height: 48px; display: grid; place-items: center; }
+.nx-iconcell-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-shelf { position: relative; min-height: 0; }
+.nx-shelf > .nx-iconcell { position: absolute; }
+.nx-pathview { display: flex; align-items: center; padding: 4px 8px; gap: 10px; overflow: hidden; }
+
+/* ---- Table ---- */
+
+.nx-table { display: flex; min-width: 0; min-height: 0; outline: none; }
+.nx-table > .nx-scrollview { flex: 1; }
+.nx-rows { background: var(--nx-light); min-height: 100%; }
+.nx-row { display: flex; align-items: center; height: 17px; white-space: nowrap; }
+.nx-row > span { flex: none; padding: 0 6px; overflow: hidden; text-overflow: ellipsis; }
+.nx-row > .flag { width: 18px; padding: 0; text-align: center; color: #2a7a2a; font-size: 11px; }
+.nx-row > span:last-child { flex: 1; }
+.nx-row.marked > span:not(.flag) { background: var(--nx-marked); }
+.nx-row.selected > span:not(.flag) { background: var(--nx-white); }
+.nx-row > span:not(.flag) { align-self: stretch; display: flex; align-items: center; }
+
+/* ---- Text view ---- */
+
+.nx-textview { display: flex; min-width: 0; min-height: 0; }
+.nx-textview > .nx-scrollview { flex: 1; }
+.nx-text {
+  min-height: 100%;
+  padding: 4px 6px 8px;
+  background: var(--nx-white);
+  font-size: 12px;
+  line-height: 15px;
+  outline: none;
+  white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.nx-text::selection,
+.nx-text *::selection { background: var(--nx-light); }
+
+/* ---- Split view ---- */
+
+.nx-split { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.nx-split.row { flex-direction: row; }
+.nx-pane { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.nx-pane > * { flex: 1; min-height: 0; min-width: 0; }
+.nx-pane:last-child { flex: 1 1 0; }
+.nx-divider { flex: none; height: 9px; display: grid; place-items: center; cursor: row-resize; }
+.nx-split.row > .nx-divider { height: auto; width: 9px; cursor: col-resize; }
+
+/* ---- Tabs ---- */
+
+.nx-tabs {
+  --nx-tab-selected: var(--nx-light);
+  display: flex;
+  align-items: flex-end;
+  height: 24px;
+  padding: 0 8px;
+  /* The base line the tabs stand on (the top edge of the content below). */
+  box-shadow: inset 0 -1px var(--nx-black);
+}
+.nx-tab {
+  position: relative;
+  height: 20px;
+  padding: 0 16px 1px;
+  border: 1px solid var(--nx-black);
+  border-bottom: none;
+  background: var(--nx-light);
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px 0 var(--nx-dark), inset 0 -1px var(--nx-black);
+  white-space: nowrap;
+}
+.nx-tab + .nx-tab { margin-left: -1px; }
+.nx-tab.selected {
+  z-index: 1;
+  height: 24px;
+  padding-bottom: 3px;
+  background: var(--nx-tab-selected);
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px 0 var(--nx-dark);
+}
+.nx-tab:focus-visible { outline: 1px dotted var(--nx-black); outline-offset: -5px; }
+
+/* ---- Check matrix ---- */
+
+.nx-matrix { display: grid; grid-template-columns: auto auto; column-gap: 4px; row-gap: 5px; align-items: start; }
+.nx-matrix-rowlabels { display: flex; flex-direction: column; padding-top: 1px; gap: 1px; }
+.nx-matrix-rowlabels > span { height: 16px; display: flex; align-items: center; justify-content: flex-end; }
+.nx-matrix-cells {
+  display: grid;
+  gap: 1px;
+  background: var(--nx-dark);
+  border: 1px solid var(--nx-dark);
+  box-shadow: 1px 1px var(--nx-white);
+}
+.nx-matrix-cell { width: 41px; height: 16px; padding: 0; border: none; display: grid; place-items: center; background: var(--nx-light); }
+.nx-matrix-cell.pressed { background: var(--nx-white); }
+.nx-matrix-cell:disabled svg { opacity: 0.5; }
+.nx-matrix-collabels { display: grid; gap: 1px; padding: 0 1px; }
+.nx-matrix-collabels > span { text-align: center; font-size: 13px; }
+
+/* ---- Clock ---- */
+
+.nx-clock { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.nx-lcd {
+  width: 54px;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: var(--nx-lcd);
+  border: 1px solid;
+  border-color: var(--nx-black) var(--nx-white) var(--nx-white) var(--nx-black);
+}
+.nx-lcd-ampm { color: var(--nx-lcd-on); font: bold 7px/1 Helvetica, Arial, sans-serif; margin-top: 3px; }
+.nx-cal {
+  position: relative;
+  width: 34px;
+  height: 36px;
+  margin: 1px 4px 4px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--nx-white);
+  box-shadow: 1px 1px 0 var(--nx-light), 2px 2px 0 var(--nx-black), 3px 3px 0 var(--nx-dark), 4px 4px 0 var(--nx-black);
+}
+.nx-cal::after {
+  /* Curled corner of the page. */
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  border-left: 5px solid var(--nx-white);
+  border-top: 4px solid transparent;
+  transform: translate(-3px, 0);
+}
+.nx-cal-dow, .nx-cal-mon { font: bold 8px/1 Helvetica, Arial, sans-serif; letter-spacing: 0.5px; }
+.nx-cal-dow { margin-top: 2px; }
+.nx-cal-day { font: 23px/21px Times, 'Times New Roman', serif; letter-spacing: -1px; }
+.nx-clock.sans .nx-cal-day { font: bold 22px/21px Helvetica, Arial, sans-serif; letter-spacing: -1px; }
+.nx-clock.sans .nx-cal-mon { font-style: italic; }
+.nx-clock-year { font: bold 9px/1 Helvetica, Arial, sans-serif; letter-spacing: 1px; margin-top: 1px; }
+
+/* ---- Tiles & dock ---- */
+
+.nx-tile {
+  position: relative;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #a6a8ad 0%, #908f9c 40%, #7a7a87 65%, #4b4d5a 100%);
+  box-shadow: inset 2px 2px var(--nx-white), inset -1px -1px var(--nx-black), inset -2px -2px var(--nx-dark);
+}
+.nx-tile.pressed::before { content: ''; position: absolute; inset: 2px 2px 2px 2px; background: rgba(0, 0, 0, 0.18); }
+.nx-tile.selected::before { content: ''; position: absolute; inset: 2px; background: rgba(255, 255, 255, 0.25); }
+.nx-tile-dots { position: absolute; left: 5px; bottom: 4px; display: flex; gap: 2px; }
+.nx-tile-dots > i { width: 2px; height: 2px; background: var(--nx-black); }
+.nx-tile.running > .nx-tile-dots { display: none; }
+.nx-tile-badge { position: absolute; left: 6px; top: 4px; font: bold 11px/1 Helvetica, Arial, sans-serif; }
+.nx-tile-content { display: grid; place-items: center; }
+.nx-tile-mini-title {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  right: 1px;
+  height: 11px;
+  padding: 0 2px;
+  background: var(--nx-black);
+  color: var(--nx-white);
+  font: bold 9px/11px Helvetica, Arial, sans-serif;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nx-tile.mini > .nx-tile-content { margin-top: 10px; }
+.nx-dock { position: absolute; z-index: 9000; display: flex; flex-direction: column; }
+.nx-dock > .nx-tile.dragging { z-index: 1; opacity: 0.9; }
+.nx-desktop > .nx-tile { position: absolute; }
+
+/* ---- Popover ---- */
+
+.nx-popover {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  max-width: 340px;
+  border: 1px solid var(--nx-black);
+  background: var(--nx-light);
+  box-shadow: var(--nx-raised), 3px 3px 0 rgba(0, 0, 0, 0.35);
+}
+.nx-popover.passive { pointer-events: none; }
+.nx-popover-title {
+  height: 19px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px 1px;
+  background: var(--nx-black);
+  color: var(--nx-white);
+  font-weight: bold;
+  white-space: nowrap;
+}
+.nx-popover-title[hidden] { display: none; }
+.nx-popover-body { padding: 8px 9px 9px 8px; }

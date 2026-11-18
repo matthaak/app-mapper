@@ -1,0 +1,42 @@
+/* Theme tokens and page base shared by every module. */
+
+:root {
+  --bg: #fbfbfa;
+  --grid: rgba(0, 0, 0, 0.045);
+  --panel: #ffffff;
+  --panel-border: #e2e2df;
+  --node-bg: #ffffff;
+  --node-border: #a3a7ad;
+  --text: #1f2328;
+  --muted: #6b7078;
+  --hier: #8a9099;
+  --dep: #3a6fd8;
+  --sel: #e8590c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18191b;
+    --grid: rgba(255, 255, 255, 0.05);
+    --panel: #222326;
+    --panel-border: #34363a;
+    --node-bg: #222326;
+    --node-border: #62666d;
+    --text: #e6e7e9;
+    --muted: #9a9ea6;
+    --hier: #7d828a;
+    --dep: #6f9bff;
+    --sel: #ff8a3d;
+  }
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}

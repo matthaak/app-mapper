@@ -1,0 +1,107 @@
+---
+name: app-mapper
+description: Work on this project's App Mapper specs — the Markdown files that describe the app, their Dependencies sections, and the {{projectFile}} map — and run the review loop on tracked changes and comments in them. Use when writing or changing specs, linking modules, putting files on the map, or when the user says they have edited, marked up or commented on the specs and wants them checked, implemented or answered.
+---
+
+<!-- app-mapper-skill v{{version}} — written by App Mapper. Don't edit: App Mapper replaces this file when it updates it. Put project-specific instructions in AGENTS.md or CLAUDE.md. -->
+
+# App Mapper
+
+This project is mapped with App Mapper. Its Markdown files are the specs of the application, one per module or concern; App Mapper shows them as nodes on a canvas, with arrows for their dependencies, and the user edits them there with tracked changes and comments. The specs and the code should always agree: a spec change is a change request, and code you change should be reflected in its spec.
+
+* **The project root** is the folder holding `{{projectFile}}`. Every `.md` file in it and below is a project file, except in hidden folders and `node_modules`, `dist`, `build`, `out`, `release`, `coverage`, `target`, `vendor` and `bower_components`.
+* **`{{projectFile}}`** is the map: which files are on the canvas, where, and their parents. Dependencies are never stored there.
+
+## Before you edit
+
+App Mapper keeps unsaved edits in memory, and saving writes them over whatever is on disk. Before changing a spec, make sure the user has saved in App Mapper (File ▸ Save All) — ask if you aren't sure. After you have changed files, tell the user: App Mapper picks up changed Markdown files when its window comes forward, but re-reads `{{projectFile}}` only on File ▸ Refresh All.
+
+## Writing a spec
+
+* The node's label is the file's **first `#` heading** (any level, as plain text). Give every spec one.
+* Say what the module is for, what it owns, the source files or folders it covers (in backticks), and its public interface. Prefer short sections and lists; keep it plain Markdown, so it reads the same anywhere.
+* One spec per module or concern; split a spec that covers several. A folder's overview goes in its `README.md`.
+* App Mapper's editor supports headings, paragraphs, lists, emphasis, code, links, block quotes, fenced code and GitHub tables. A list item can continue on an indented line below it.
+
+## Dependencies
+
+A spec lists what it depends on under a heading named **Dependencies** (or **Depends on**), any level, any case. Each list item whose first link points to another `.md` file is one dependency; the text after the link, past a dash or colon, is the arrow's label:
+
+```markdown
+## Dependencies
+
+- [Canvas](canvas.md) — draws the map
+- [Storage](../storage/README.md): reads and writes files
+```
+
+* Links are relative to the file; a leading `/` means the project root. Links outside the project, with a scheme (`https:`) or to other kinds of file are ignored, as are items without a link, so the section can hold notes too.
+* The section runs to the next heading of the same or a higher level; only the first such section counts. A file can't depend on itself; a second item for the same target is ignored.
+* Use the target's title as the link text, and a label of a few words. Add the section at the end of the file if there is none.
+* Dependencies follow the code: when a module starts or stops using another, update its list.
+
+## The map: {{projectFile}}
+
+```json
+{
+  "version": 1,
+  "nodes": [
+    {"file":"README.md","x":0,"y":0,"parent":null},
+    {"file":"src/api/README.md","x":-224,"y":112,"parent":"README.md"}
+  ]
+}
+```
+
+* One entry per node: `file` (relative to the root, `/`-separated, listed once), `x` and `y` (numbers, multiples of 16), and `parent` (another node's file, or `null`).
+* Keep entries sorted by `file`, one per line, exactly as above, so the file diffs well.
+* When you create a spec, add its node: under the spec it belongs to, placed near its parent and its siblings without overlapping them (a node is 192 wide and 64 high; copy the spacing already used). If you're unsure where it goes, leave it off and tell the user — they can add it with File ▸ Add MD File.
+* Never remove nodes unless asked. Removing a node never deletes its file, and deleting a file is never done through the map.
+
+## Tracked changes and comments
+
+App Mapper's editor writes its review markup into the Markdown itself, so you read and write it as text:
+
+| Markup | Meaning |
+| --- | --- |
+| `++@@thread@@text++` | An addition |
+| `~~@@thread@@text~~` | A deletion |
+| `^^@@thread@@text^^` | A highlight: a comment or question on that text |
+
+The thread opens the mark, right after its opening delimiter: `@@note@@note@@…@@`. Each note is an author, optionally `.` and a Unix time in seconds, optionally a space and a comment:
+
+```
+++@@Matt.1794519000 Users can export a map as SVG@@Claude.1794520100 Done: src/export/svg.ts@@and as SVG++
+```
+
+The first note belongs to whoever made the change; the rest are replies. A thread whose **last note's comment is `Accepted` or `Rejected`** (any case, a final `.` or `!` allowed) is **resolved**. A mark may also have no thread at all (`++text++`).
+
+The grammar is strict — App Mapper won't read a thread that breaks it:
+
+* The author is letters, digits and underscores only (`\w+`). Write yours as `Claude` (or your own agent's name, the same every time).
+* Time is Unix seconds (`date +%s`).
+* A comment is one line, with no `@@`, `^^`, `~~` or `++` in it, and doesn't end in `@`.
+* Never put a line break inside a mark: one mark per paragraph or list item.
+
+Titles and dependencies are read as if every change were accepted: deleted text left out, added text kept.
+
+## The review loop
+
+When the user says they have changed, marked up or commented on the specs:
+
+1. **Find the work.** Search the project's Markdown files for marks whose thread is not resolved and whose last note is not yours (`grep -rnE '(\+\+|~~|\^\^)@@' --include='*.md' .`). Also check `git diff -- '*.md'` (if the project uses git) for edits made with Track Changes off. A comment on an earlier review of yours counts too.
+2. **Read each one as a request:**
+   * an addition is a new or changed requirement — implement it;
+   * a deletion removes a requirement — take that behavior out;
+   * a highlight is a question or instruction about its text — answer or do it; it isn't a spec change by itself;
+   * a reply on one of your changes is feedback on it.
+3. **Act, then reply in the thread.** Append one note to the mark's thread saying what you did and where — `@@Claude.<time> Done: src/x.ts@@` — or why you didn't. Keep the mark itself: **never accept or reject the user's changes**, never add `Accepted` or `Rejected` to a thread whose change isn't yours, and never delete their marks. The user accepts once they have checked your work; that is their sign-off.
+4. **Clarify in the spec, as tracked changes.** When implementing shows that a spec is incomplete or wrong, change it as your own tracked change with a reason — `++@@Claude.<time> Clarified: the limit is per project@@ (per project)++`, `~~@@Claude.<time> No longer true: the cache was removed@@…~~` — so the user sees it in the review column and can accept or reject it.
+5. **Ask rather than guess.** If a request is ambiguous or conflicts with another spec or the code, don't implement a guess: reply with the question, or highlight the text with your question (`^^@@Claude.<time> Should this also apply to drafts?@@text^^`), and leave it open.
+6. **Report.** Tell the user, briefly, which requests you implemented, which specs you clarified, and which questions are waiting for them.
+
+Leave resolved marks and their threads alone. Clean them up only when the user asks: then an accepted addition or rejected deletion becomes its plain text, an accepted deletion or rejected addition goes entirely, and an answered highlight becomes its plain text.
+
+## Writing specs yourself
+
+* When you create a new spec, write it plainly, without tracked changes, and add its node to the map.
+* When you change an existing spec that the user has reviewed — anything beyond keeping a file list or dependency list in step with the code — write the change as your tracked addition or deletion, with a one-line reason as its comment.
+* Keep the rest of a file exactly as it was: change only what you mean to.

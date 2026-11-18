@@ -1,0 +1,338 @@
+/*
+ * The Modern theme (View ▸ Theme ▸ Modern): the same widgets, flat, light and rounded — white
+ * surfaces on a soft grey, hairline borders, one blue accent, the system font. On while the root
+ * element has data-theme="modern" (see setNxTheme); every rule here is keyed on that, so Classic
+ * (nx.css alone) is untouched. Other modules key their own Modern rules the same way, on the
+ * --m-* tokens below.
+ */
+
+:root[data-theme='modern'] {
+  --m-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  /* Surfaces: the page behind everything, raised surfaces (windows, panels), a quiet fill for bars. */
+  --m-bg: #f3f3f5;
+  --m-surface: #ffffff;
+  --m-bar: #f7f7f8;
+  /* Hairlines, and the firmer edge of controls. */
+  --m-line: #e3e3e8;
+  --m-edge: #d1d1d7;
+  --m-text: #1d1d1f;
+  --m-muted: #6e6e73;
+  --m-faint: #a1a1a6;
+  --m-accent: #2f6fed;
+  --m-accent-soft: #e8effd;
+  --m-accent-ring: rgba(47, 111, 237, 0.22);
+  --m-hover: rgba(0, 0, 0, 0.045);
+  --m-press: rgba(0, 0, 0, 0.09);
+  --m-radius: 6px;
+  --m-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --m-shadow-float: 0 10px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+/*
+ * The NeXT tokens, remapped: rules that only use them (bevels become hairlines) come out right
+ * without their own Modern rule.
+ */
+[data-theme='modern'] .nx {
+  --nx-black: var(--m-text);
+  --nx-dark: var(--m-muted);
+  --nx-light: var(--m-bar);
+  --nx-white: var(--m-surface);
+  --nx-soft: var(--m-line);
+  --nx-desktop: var(--m-bg);
+  --nx-marked: var(--m-accent-soft);
+  --nx-trough: transparent;
+  --nx-raised: inset 0 0 0 1px var(--m-edge);
+  --nx-sunken: inset 0 0 0 1px var(--m-accent);
+  --nx-raised-dim: inset 0 0 0 1px var(--m-line);
+  /* Scrollers without arrow buttons (read by NxScroller). */
+  --nx-scroller-arrows: 0;
+  font: 13px/1.3 var(--m-font);
+  color: var(--m-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Window ---- */
+
+[data-theme='modern'] .nx-window {
+  background: var(--m-surface);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--m-shadow-float);
+}
+[data-theme='modern'] .nx-titlebar {
+  height: 30px;
+  padding: 0;
+  background: var(--m-bar);
+  border-bottom: 1px solid var(--m-line);
+  box-shadow: none;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--m-faint);
+}
+[data-theme='modern'] .nx-window.main > .nx-titlebar { background: var(--m-bar); color: var(--m-muted); }
+[data-theme='modern'] .nx-window.key > .nx-titlebar { background: var(--m-bar); color: var(--m-text); box-shadow: none; }
+[data-theme='modern'] .nx-title { padding: 0 56px; }
+
+/* Title buttons: small circles at the left, their glyphs showing while the pointer is on the bar. */
+[data-theme='modern'] .nx-title-btn {
+  top: 8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #d4d4d8;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+[data-theme='modern'] .nx-title-btn.close { left: 10px; right: auto; }
+[data-theme='modern'] .nx-title-btn.mini { left: 28px; }
+[data-theme='modern'] .nx-window.key .nx-title-btn.close { background: #ff5f57; }
+[data-theme='modern'] .nx-window.key .nx-title-btn.mini { background: #febc2e; }
+[data-theme='modern'] .nx-title-btn > svg { width: 6px; height: 6px; opacity: 0; }
+[data-theme='modern'] .nx-titlebar:hover .nx-title-btn > svg,
+[data-theme='modern'] .nx-menu-title:hover .nx-title-btn > svg { opacity: 0.55; }
+[data-theme='modern'] .nx-title-btn.pressed { filter: brightness(0.85); }
+[data-theme='modern'] .nx-mini-glyph { display: none; }
+
+/* On Windows (data-os, see theme.ts): an X at the top right, red under the pointer, and a
+   minimize bar beside it, as Windows draws them. */
+[data-theme='modern'][data-os='windows'] .nx-title { padding: 0 96px; }
+[data-theme='modern'][data-os='windows'] .nx-title-btn,
+[data-theme='modern'][data-os='windows'] .nx-window.key .nx-title-btn:is(.close, .mini) {
+  top: 0;
+  width: 44px;
+  height: 29px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transition: background 0.1s;
+}
+[data-theme='modern'][data-os='windows'] .nx-title-btn.close { left: auto; right: 0; }
+[data-theme='modern'][data-os='windows'] .nx-title-btn.mini { left: auto; right: 44px; }
+[data-theme='modern'][data-os='windows'] .nx-title-btn > svg,
+[data-theme='modern'][data-os='windows'] .nx-titlebar:hover .nx-title-btn > svg,
+[data-theme='modern'][data-os='windows'] .nx-menu-title:hover .nx-title-btn > svg { width: 10px; height: 10px; opacity: 0.8; }
+[data-theme='modern'][data-os='windows'] .nx-window:not(.key) .nx-title-btn > svg { opacity: 0.4; }
+[data-theme='modern'][data-os='windows'] .nx-mini-glyph { display: block; width: 10px; height: 1px; border: none; box-shadow: none; background: var(--m-text); opacity: 0.8; }
+[data-theme='modern'][data-os='windows'] .nx-title-btn:hover { background: var(--m-hover); }
+[data-theme='modern'][data-os='windows'] .nx-title-btn.close:hover,
+[data-theme='modern'][data-os='windows'] .nx-window.key .nx-title-btn.close:hover { background: #c42b1c; }
+[data-theme='modern'][data-os='windows'] .nx-title-btn.close:hover > svg { filter: invert(1); opacity: 1; }
+[data-theme='modern'][data-os='windows'] .nx-title-btn.pressed { filter: brightness(0.85); }
+[data-theme='modern'][data-os='windows'] .nx-menu-title .nx-title-btn { top: 0; right: 0; width: 40px; }
+[data-theme='modern'][data-os='windows'] .nx-menu-title { padding-right: 44px; }
+
+/* The resize bar: no bar, just room to grab along the bottom edge. */
+[data-theme='modern'] .nx-resizebar { height: 7px; gap: 0; background: transparent; border-top: none; }
+[data-theme='modern'] .nx-resizebar > div { background: transparent; box-shadow: none; }
+
+/* ---- Menu ---- */
+
+[data-theme='modern'] .nx-menu {
+  min-width: 150px;
+  padding-bottom: 4px;
+  background: var(--m-surface);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  box-shadow: var(--m-shadow-float);
+}
+[data-theme='modern'] .nx-menu-title {
+  height: 30px;
+  margin-bottom: 4px;
+  padding: 0 30px 0 12px;
+  background: var(--m-surface);
+  color: var(--m-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow: none;
+  border: none;
+  border-bottom: 1px solid var(--m-line);
+}
+[data-theme='modern'] .nx-menu-title .nx-title-btn { top: 9px; left: auto; right: 10px; }
+[data-theme='modern'] .nx-menu-item {
+  height: 26px;
+  margin: 0 4px;
+  padding: 0 10px;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+}
+[data-theme='modern'] :is(.nx-menu-item.highlighted, .nx-menu-item.pressed) { background: var(--m-accent); color: #fff; }
+[data-theme='modern'] .nx-menu-item.disabled { color: var(--m-faint); }
+[data-theme='modern'] .nx-menu-item > svg { opacity: 0.55; }
+[data-theme='modern'] :is(.nx-menu-item.highlighted, .nx-menu-item.pressed) > svg { filter: brightness(0) invert(1); opacity: 1; }
+
+/* ---- Button ---- */
+
+[data-theme='modern'] .nx-button {
+  border-radius: var(--m-radius);
+  background: var(--m-surface);
+  box-shadow: inset 0 0 0 1px var(--m-edge), var(--m-shadow);
+}
+[data-theme='modern'] .nx-button:hover:not(:disabled) { background: #fafafb; }
+[data-theme='modern'] .nx-button.pressed { background: #ececef; }
+[data-theme='modern'] .nx-button.on { background: var(--m-accent-soft); color: var(--m-accent); box-shadow: inset 0 0 0 1px #bccff8; }
+[data-theme='modern'] .nx-button.on > * { transform: none; }
+[data-theme='modern'] .nx-button.on.pressed { background: #d9e5fc; }
+[data-theme='modern'] .nx-button:disabled { color: var(--m-faint); box-shadow: inset 0 0 0 1px var(--m-line); background: var(--m-surface); }
+[data-theme='modern'] .nx-button:disabled > .label { color: var(--m-faint); }
+[data-theme='modern'] .nx-button.on:disabled { box-shadow: inset 0 0 0 1px var(--m-line); background: var(--m-bar); }
+[data-theme='modern'] .nx-button:focus-visible { outline: 2px solid var(--m-accent-ring); outline-offset: 1px; }
+/* The default button (the one Return presses): filled with the accent. */
+[data-theme='modern'] .nx-button.has-key:not(:disabled) { background: var(--m-accent); color: #fff; box-shadow: 0 1px 2px rgba(47, 111, 237, 0.3); }
+[data-theme='modern'] .nx-button.has-key:not(:disabled).pressed { background: #2459c9; }
+[data-theme='modern'] .nx-button.has-key:not(:disabled) > svg { filter: brightness(0) invert(1); }
+
+/* ---- Switch (check box) ---- */
+
+[data-theme='modern'] .nx-switch { color: var(--m-text); gap: 7px; }
+[data-theme='modern'] .nx-switch-box { width: 15px; height: 15px; border-radius: 4px; background: var(--m-surface); box-shadow: inset 0 0 0 1px var(--m-edge); }
+[data-theme='modern'] .nx-switch.on .nx-switch-box { background: var(--m-accent); box-shadow: none; }
+[data-theme='modern'] .nx-switch.on .nx-switch-box > svg { filter: brightness(0) invert(1); transform: scale(0.85); }
+[data-theme='modern'] .nx-switch.pressed .nx-switch-box { background: #ececef; }
+[data-theme='modern'] .nx-switch.on.pressed .nx-switch-box { background: #2459c9; }
+[data-theme='modern'] .nx-switch:disabled { color: var(--m-faint); }
+[data-theme='modern'] .nx-switch:focus-visible > .label { outline: none; }
+[data-theme='modern'] .nx-switch:focus-visible .nx-switch-box { outline: 2px solid var(--m-accent-ring); outline-offset: 1px; }
+
+/* ---- Pop-up button: a chevron for the NeXT mark ---- */
+
+[data-theme='modern'] .nx-popup { padding: 0 9px 0 10px; }
+[data-theme='modern'] .nx-popup-mark {
+  width: 6px;
+  height: 6px;
+  margin: 0 1px 3px 0;
+  background: none;
+  border: none;
+  border-right: 1.5px solid var(--m-muted);
+  border-bottom: 1.5px solid var(--m-muted);
+  box-shadow: none;
+  transform: rotate(45deg);
+}
+[data-theme='modern'] .nx-popup-list {
+  padding: 4px 0;
+  background: var(--m-surface);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  box-shadow: var(--m-shadow-float);
+}
+
+/* ---- Text field & label ---- */
+
+[data-theme='modern'] .nx-field {
+  height: 26px;
+  overflow: hidden;
+  border: 1px solid var(--m-edge);
+  border-radius: var(--m-radius);
+  background: var(--m-surface);
+}
+[data-theme='modern'] .nx-field:focus-within { border-color: var(--m-accent); box-shadow: 0 0 0 3px var(--m-accent-ring); }
+[data-theme='modern'] .nx-field > input { padding: 0 8px; border: none; color: var(--m-text); caret-color: var(--m-accent); }
+[data-theme='modern'] .nx-field > input::selection { background: var(--m-accent-soft); }
+[data-theme='modern'] .nx-field.disabled { background: var(--m-bar); }
+[data-theme='modern'] :is(.nx-field.disabled > input, .nx-label.disabled) { color: var(--m-faint); }
+[data-theme='modern'] .nx-etched { height: 1px; border-top: 1px solid var(--m-line); border-bottom: none; }
+
+/* ---- Box ---- */
+
+[data-theme='modern'] .nx-box { border: 1px solid var(--m-line); border-radius: 8px; box-shadow: none; }
+[data-theme='modern'] .nx-box-title { background: var(--m-surface); color: var(--m-muted); font-size: 12px; font-weight: 600; }
+
+/* ---- Scroller: a thin rounded knob in a plain trough, no arrows ---- */
+
+[data-theme='modern'] .nx-scroller { background: var(--m-surface); }
+[data-theme='modern'] .nx-knob { border-radius: 999px; background: #c9c9ce; box-shadow: none; transition: background 0.12s; }
+[data-theme='modern'] .nx-knob:hover,
+[data-theme='modern'] .nx-knob:active { background: #a6a6ab; }
+[data-theme='modern'] .nx-scroller.v .nx-knob { left: 5px; width: 8px; }
+[data-theme='modern'] .nx-scroller.h .nx-knob { top: 5px; height: 8px; }
+[data-theme='modern'] .nx-dimple,
+[data-theme='modern'] .nx-scroller-arrows { display: none; }
+
+/* ---- Scroll view ---- */
+
+[data-theme='modern'] .nx-scrollview.bezel { border: 1px solid var(--m-edge); border-radius: var(--m-radius); overflow: hidden; }
+[data-theme='modern'] .nx-scrollview.bezel > .nx-sv-frame { border: none; }
+[data-theme='modern'] .nx-scrollview.line > .nx-sv-frame { border: 1px solid var(--m-line); }
+[data-theme='modern'] .nx-sv-row > .nx-scroller.v { border-right: 1px solid var(--m-line); }
+[data-theme='modern'] .nx-sv-frame > .nx-scroller.h.bottom { border-top: 1px solid var(--m-line); }
+[data-theme='modern'] .nx-sv-frame > .nx-scroller.h.top { border-bottom: 1px solid var(--m-line); }
+/* Content scrolls natively (the system's own scrollbars, overlaid or not): no NeXT scrollers. */
+[data-theme='modern'] :is(.nx-sv-row, .nx-sv-frame) > .nx-scroller { display: none; }
+[data-theme='modern'] .nx-viewport { overflow: auto; }
+[data-theme='modern'] .nx-scrollview:not(.h-scroll) .nx-viewport { overflow-x: hidden; }
+
+/* ---- Lists, browser, table: white, roomier rows, the selection in the accent ---- */
+
+[data-theme='modern'] :is(.nx-cells, .nx-rows) { background: var(--m-surface); }
+[data-theme='modern'] .nx-cell { height: 22px; padding: 0 8px; gap: 8px; }
+[data-theme='modern'] .nx-cell > .detail { color: var(--m-muted); }
+[data-theme='modern'] .nx-cell.selected { background: var(--m-accent); color: #fff; }
+[data-theme='modern'] .nx-cell.selected > .detail { color: rgba(255, 255, 255, 0.8); }
+[data-theme='modern'] .nx-cell.selected > svg { filter: brightness(0) invert(1); }
+[data-theme='modern'] .nx-cell.selected > .dot { background: #fff; }
+[data-theme='modern'] .nx-cell.disabled { color: var(--m-faint); }
+[data-theme='modern'] .nx-list:not(:focus-within) .nx-cell.selected { background: #dcdce1; color: var(--m-text); }
+[data-theme='modern'] .nx-list:not(:focus-within) .nx-cell.selected > svg { filter: none; }
+
+[data-theme='modern'] .nx-browser { border: 1px solid var(--m-edge); border-radius: 8px; overflow: hidden; background: var(--m-surface); }
+[data-theme='modern'] .nx-browser > .nx-scroller.h { border-bottom: 1px solid var(--m-line); }
+[data-theme='modern'] .nx-column + .nx-column { border-left: 1px solid var(--m-line); }
+[data-theme='modern'] .nx-column.filler { background: var(--m-surface); }
+[data-theme='modern'] .nx-column.filler::before { display: none; }
+
+[data-theme='modern'] .nx-row { height: 24px; }
+[data-theme='modern'] .nx-row.marked > span:not(.flag) { background: var(--m-accent-soft); }
+[data-theme='modern'] .nx-row.selected > span:not(.flag) { background: var(--m-accent); color: #fff; }
+
+[data-theme='modern'] .nx-iconcell { border-radius: 8px; }
+[data-theme='modern'] .nx-iconcell.selected { background: var(--m-accent-soft); }
+
+[data-theme='modern'] .nx-text { padding: 8px 10px 10px; background: var(--m-surface); font-size: 13px; line-height: 18px; }
+[data-theme='modern'] :is(.nx-text::selection, .nx-text *::selection) { background: var(--m-accent-soft); }
+
+/* ---- Tabs: flat labels on a hairline, the front one underlined in the accent ---- */
+
+[data-theme='modern'] .nx-tabs { height: 30px; padding: 0 10px; gap: 2px; box-shadow: inset 0 -1px var(--m-line); }
+[data-theme='modern'] .nx-tab {
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--m-muted);
+  font-weight: 500;
+}
+[data-theme='modern'] .nx-tab + .nx-tab { margin-left: 0; }
+[data-theme='modern'] .nx-tab:hover { color: var(--m-text); }
+[data-theme='modern'] .nx-tab.selected { height: 30px; padding-bottom: 0; background: transparent; color: var(--m-text); box-shadow: inset 0 -2px var(--m-accent); }
+[data-theme='modern'] .nx-tab:focus-visible { outline: 2px solid var(--m-accent-ring); outline-offset: -4px; border-radius: 6px; }
+
+/* ---- Check matrix ---- */
+
+[data-theme='modern'] .nx-matrix-cells { background: var(--m-line); border: 1px solid var(--m-line); border-radius: var(--m-radius); overflow: hidden; box-shadow: none; }
+[data-theme='modern'] .nx-matrix-cell { background: var(--m-surface); }
+[data-theme='modern'] .nx-matrix-cell.pressed { background: var(--m-accent-soft); }
+
+/* ---- Tiles & dock ---- */
+
+[data-theme='modern'] .nx-tile {
+  border-radius: 14px;
+  background: var(--m-surface);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), var(--m-shadow-float);
+}
+[data-theme='modern'] :is(.nx-tile.pressed, .nx-tile.selected)::before { border-radius: 12px; background: var(--m-press); }
+[data-theme='modern'] .nx-tile-dots > i { border-radius: 50%; background: var(--m-muted); }
+[data-theme='modern'] .nx-tile-mini-title { border-radius: 4px; background: var(--m-text); font-family: var(--m-font); }
+
+/* ---- Popover ---- */
+
+[data-theme='modern'] .nx-popover {
+  overflow: hidden;
+  background: var(--m-surface);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  box-shadow: var(--m-shadow-float);
+}
+[data-theme='modern'] .nx-popover-title { height: 30px; padding: 0 12px; background: var(--m-bar); color: var(--m-text); font-weight: 600; border-bottom: 1px solid var(--m-line); }
+[data-theme='modern'] .nx-popover-body { padding: 12px; }

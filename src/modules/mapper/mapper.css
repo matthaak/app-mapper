@@ -1,0 +1,248 @@
+/*
+ * App Mapper. The workspace is a NeXT desktop whose background is the canvas; everything over
+ * it (menu, panels, editor windows) is NeXT widgets.
+ */
+
+.mapper-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+/* The hint stays left of the dock's bezel (--mapper-reserve, set by the app). */
+.mapper .canvas .hint { right: calc(var(--mapper-reserve, 0px) + 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #c9cadb; }
+
+/*
+ * The canvas in NeXT dress: the workspace's purple desktop with faint, slightly lighter grid
+ * lines, and the diagram in black, white and dashes. Nodes are window grey with black frames;
+ * hierarchy lines are solid window grey, 2px; dependencies dashed white. A selection is a
+ * heavier black frame.
+ * (The NeXT palette doesn't follow the light/dark theme.)
+ */
+.mapper .canvas {
+  --bg: #4f5170; /* --nx-desktop */
+  --grid: rgba(255, 255, 255, 0.07);
+  --node-bg: #a0a0a0; /* --nx-light, the windows' grey */
+  --node-border: #000;
+  --text: #000;
+  --muted: #505050;
+  --hier: #a0a0a0;
+  --dep: #fff;
+  --sel: #000;
+}
+.mapper .canvas .node rect { rx: 0; }
+.mapper .canvas .hier,
+.mapper .canvas .ledge { stroke: var(--hier); stroke-width: 2; }
+.mapper .canvas .node.selected rect { stroke-width: 3; }
+.mapper .canvas .node.source rect { stroke: #000; stroke-width: 3; stroke-dasharray: 6 3; }
+.mapper .canvas .node.target rect { stroke: #000; stroke-width: 3; }
+.mapper .canvas .dep-line { stroke-width: 1.25; stroke-dasharray: 6 3; }
+.mapper .canvas .dep:hover .dep-line { stroke-width: 2; }
+.mapper .canvas .dep.selected .dep-line { stroke-width: 2; }
+.mapper .canvas .preview { stroke: #fff; stroke-width: 1.25; stroke-dasharray: 6 3; }
+.mapper .canvas .editor input { outline-color: #000; border-radius: 0; }
+
+/* ---- Panels ---- */
+
+/* .nx: outranks the widgets' own nowrap (their stylesheet loads after this one). */
+.nx.mapper-wrap { white-space: normal; line-height: 1.35; }
+.mapper-ellipsis { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* New MD File: Title and Name labels one width, so their fields line up. */
+.mapper-new-file .nx-textfield > .nx-label { flex: none; min-width: 40px; }
+
+/* ---- Paneled UI: the editor dock ---- */
+
+.mapper-dock {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+}
+.mapper-dock[hidden] { display: none; }
+
+/* The resizer: a window's resize bar (its middle section), standing on end. */
+.mapper-dock-resizer {
+  flex: none;
+  width: 10px;
+  background: var(--nx-light);
+  border-left: 1px solid var(--nx-black);
+  border-right: 1px solid var(--nx-black);
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px -1px var(--nx-dark);
+  cursor: ew-resize;
+}
+.mapper-dock-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--nx-light); }
+
+/*
+ * The tabs stand on a black base line with the page's white highlight under it. The front tab
+ * covers both, so it and the page below make one shape; the others stand on the line.
+ */
+.mapper-dock-tabs {
+  --nx-tab-selected: var(--nx-light);
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  height: 30px;
+  padding: 0 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  box-shadow: inset 0 -1px var(--nx-white), inset 0 -2px var(--nx-black);
+}
+/* .nx: outranks the widgets' own tab styles (their stylesheet loads after this one). */
+.nx .mapper-dock-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  max-width: 220px;
+  margin-bottom: 2px;
+  padding: 0 6px 1px 12px;
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px 0 var(--nx-dark);
+}
+.nx .mapper-dock-tab.selected {
+  height: 24px;
+  margin-bottom: 0;
+  padding-bottom: 3px;
+  background: var(--nx-light);
+  box-shadow: inset 1px 1px var(--nx-white), inset -1px 0 var(--nx-dark);
+}
+/* The front tab's black left edge stops above the page's white highlight, which runs on into the tab's own. */
+.nx .mapper-dock-tab.selected::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  background: var(--nx-white);
+}
+.mapper-dock-tab-label { overflow: hidden; text-overflow: ellipsis; }
+.mapper-dock-tab-close { flex: none; width: 13px; height: 13px; line-height: 12px; text-align: center; font-size: 13px; color: var(--nx-dark); }
+.mapper-dock-tab-close:hover { color: var(--nx-black); background: var(--nx-white); box-shadow: var(--nx-raised); }
+
+.mapper-dock-body { position: relative; flex: 1; min-height: 0; }
+.mapper-dock-page { position: absolute; inset: 0; }
+.mapper-dock-page[hidden] { display: none; }
+/* The page's own top highlight is drawn under the tabs, around the front one. */
+.mapper-dock-page .md-header { box-shadow: none; }
+.mapper-dock-editor { position: absolute; inset: 0; }
+.mapper-dock-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--nx-dark); }
+.mapper-dock-empty[hidden] { display: none; }
+.mapper-dock.empty .mapper-dock-tabs { box-shadow: inset 0 -1px var(--nx-black); }
+.mapper-dock-handle { display: none; }
+
+/* Collapsed: just a drawer tab standing against the right edge, wherever it was dragged. */
+.mapper-dock.collapsed { width: 0; }
+.mapper-dock.collapsed > .mapper-dock-resizer,
+.mapper-dock.collapsed > .mapper-dock-panel { display: none; }
+.mapper-dock.collapsed > .mapper-dock-handle {
+  display: block;
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  writing-mode: vertical-rl;
+  padding: 14px 3px 14px 4px;
+  border: 1px solid var(--nx-black);
+  border-right: none;
+  background: var(--nx-light);
+  box-shadow: inset 1px 1px var(--nx-white), inset 0 -1px var(--nx-dark);
+  white-space: nowrap;
+  cursor: default;
+}
+.mapper-dock.collapsed > .mapper-dock-handle:active { background: var(--nx-white); }
+
+/* ---- Modern theme (View ▸ Theme ▸ Modern; tokens in the widgets' modern.css) ---- */
+
+/*
+ * The canvas: a soft grey sheet with a faint grid; nodes are white cards with rounded corners
+ * and a hairline edge, hierarchy lines a quiet grey, dependencies and the selection in the accent.
+ */
+[data-theme='modern'] .mapper .canvas {
+  --bg: #f3f3f5;
+  --grid: rgba(0, 0, 0, 0.035);
+  --node-bg: #fff;
+  --node-border: #d1d1d7;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --hier: #b9bcc4;
+  --dep: #2f6fed;
+  --sel: #2f6fed;
+  font-family: var(--m-font);
+}
+[data-theme='modern'] .mapper .canvas .node rect { rx: 8px; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.07)); }
+[data-theme='modern'] .mapper .canvas .node-label { font-weight: 500; }
+[data-theme='modern'] .mapper .canvas :is(.hier, .ledge) { stroke-width: 1.5; }
+[data-theme='modern'] .mapper .canvas .ledge { stroke: var(--hier); }
+[data-theme='modern'] .mapper .canvas .node.selected rect { stroke: var(--sel); stroke-width: 2; }
+[data-theme='modern'] .mapper .canvas .node.source rect { stroke: var(--dep); stroke-width: 2; stroke-dasharray: 5 3; }
+[data-theme='modern'] .mapper .canvas .node.target rect { stroke: var(--dep); stroke-width: 2.5; }
+[data-theme='modern'] .mapper .canvas .dep-line { stroke-width: 1.5; stroke-dasharray: 5 4; }
+[data-theme='modern'] .mapper .canvas .preview { stroke: var(--dep); stroke-width: 1.5; stroke-dasharray: 5 4; }
+[data-theme='modern'] .mapper .canvas .editor input { border-radius: 8px; outline-color: var(--sel); }
+[data-theme='modern'] .mapper .canvas .hint { color: var(--m-faint); }
+
+/* The dock: a white panel behind a hairline, with a small grip on its bezel. */
+[data-theme='modern'] .mapper-dock-resizer {
+  position: relative;
+  background: var(--m-bar);
+  border-left: 1px solid var(--m-edge);
+  border-right: 1px solid var(--m-line);
+  box-shadow: none;
+}
+[data-theme='modern'] .mapper-dock-resizer::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 28px;
+  margin-top: -14px;
+  border-radius: 1px;
+  background: var(--m-edge);
+}
+[data-theme='modern'] .mapper-dock-resizer:hover::before { background: var(--m-faint); }
+[data-theme='modern'] .mapper-dock-panel { background: var(--m-surface); }
+
+/* Its files' tabs, as in a browser: the front one joined to its page's header. */
+[data-theme='modern'] .mapper-dock-tabs { height: 36px; padding: 0 8px; gap: 2px; background: #ececef; box-shadow: inset 0 -1px var(--m-line); }
+[data-theme='modern'] .nx .mapper-dock-tab {
+  height: 28px;
+  margin-bottom: 3px;
+  padding: 0 6px 0 12px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--m-muted);
+  font-weight: 500;
+}
+[data-theme='modern'] .nx .mapper-dock-tab:hover:not(.selected) { background: var(--m-press); color: var(--m-text); }
+[data-theme='modern'] .nx .mapper-dock-tab.selected {
+  height: 31px;
+  margin-bottom: 0;
+  padding-bottom: 3px;
+  border: 1px solid var(--m-line);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--m-bar);
+  box-shadow: none;
+  color: var(--m-text);
+}
+[data-theme='modern'] .nx .mapper-dock-tab.selected::after { display: none; }
+[data-theme='modern'] .mapper-dock-tab-close { width: 16px; height: 16px; line-height: 15px; border-radius: 4px; color: var(--m-faint); }
+[data-theme='modern'] .mapper-dock-tab-close:hover { color: var(--m-text); background: var(--m-press); box-shadow: none; }
+[data-theme='modern'] .mapper-dock-empty { color: var(--m-faint); }
+[data-theme='modern'] .mapper-dock.empty .mapper-dock-tabs { box-shadow: inset 0 -1px var(--m-line); }
+[data-theme='modern'] .mapper-dock.collapsed > .mapper-dock-handle {
+  padding: 16px 5px 16px 6px;
+  border: 1px solid var(--m-edge);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--m-surface);
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.06);
+  color: var(--m-text);
+  font-weight: 500;
+}
+[data-theme='modern'] .mapper-dock.collapsed > .mapper-dock-handle:hover { background: var(--m-bar); }
+[data-theme='modern'] .mapper-dock.collapsed > .mapper-dock-handle:active { background: #ececef; }
