@@ -10,9 +10,23 @@
  * {==highlight==}, {--deletion--} and {++addition++}, each followed by its notes, and
  * {>>comments<<} anchored at a point (see notes.ts).
  *
+ * A mark opens and closes anywhere: it may run over line breaks, paragraphs and other blocks,
+ * ending at the first closing delimiter of its kind (marks of a kind inside it pair up first).
+ * Its delimiters are taken out before blocks are read, so `{++### Title` is a heading whose
+ * text is added; a line holding only delimiters (and a closing one's notes) is no block at all:
+ *
+ *     {++
+ *     ### New section
+ *
+ *     A paragraph.
+ *     ++}{>>Claude 2026-11-18 17:05: Added a section<<}
+ *
+ * An opening delimiter that never closes is just text.
+ *
  * Code is literal but for review marks: there a mark must have notes signed with an author and
- * date, and it ends at the first closing delimiter they follow (`{++i++}{>>Matt 2026-11-18<<}`
- * adds `i++`), so code that happens to look like markup stays code.
+ * date (`{++i++}{>>Matt 2026-11-18<<}` adds `i++`), so code that happens to look like markup
+ * stays code. A mark opened in a code block may run on over its lines; one opened in a code
+ * span ends in it.
  *
  * Besides the HTML, `render` reports:
  * - `plain`: for each character of the rendered DOM text (in document order), its index in the
@@ -21,9 +35,10 @@
  * - `marks`: where the marks sit in the markdown, delimiters and notes included, so the Raw
  *   view styles exactly what the Visual view styles; and their notes.
  *
- * In the HTML, each mark element carries `data-mark` (its index in `marks`). Its first element
- * also carries the notes' source text in `data-notes` (the notes themselves are not shown), so
- * the serializer can write them back after the Visual view is edited. An anchored comment is an
+ * In the HTML, each mark is an element per block it runs through (and more where it crosses
+ * other formatting), each carrying `data-mark` (its index in `marks`). The first also carries
+ * the notes' source text in `data-notes` (the notes themselves are not shown), so the
+ * serializer can write them back after the Visual view is edited. An anchored comment is an
  * empty `span.md-anchor`, with its notes.
  */
 import { noteOf, notesAt, verdictOf, type Note, type Verdict } from './notes';
@@ -39,13 +54,32 @@ export interface Mark {
   to: number;
   /** Its notes, after its closing delimiter: its author first, then replies. */
   notes: Note[];
-  /** Markdown index where its text starts, after the opening delimiter (a comment's: `from`). */
+  /**
+   * Markdown index where its text starts, after the opening delimiter (a comment's: `from`) —
+   * or, if that is alone on its line, at the start of the next line with text.
+   */
   body: number;
-  /** Markdown index where its text ends, at the closing delimiter (a comment's: `from`). */
+  /**
+   * Markdown index where its text ends, at the closing delimiter (a comment's: `from`) — or, if
+   * that starts a line of its own, at the end of the line with text before it.
+   */
   end: number;
-  /** In code. */
+  /** Markdown index just past its closing delimiter, where its notes start (a comment's: `from`). */
+  close: number;
+  /** Opened in code. */
   code: boolean;
-  /** An addition or deletion resolved in its thread (see verdictOf); kept, with its history. */
+  /**
+   * Part of a run that reads as one change, and so has one thread: marks of one kind with only
+   * spaces, line breaks and block markers between them, each either without notes or signed
+   * as the next is (the same author and time, and no other comment). The index (in `marks`) of
+   * the run's last mark, whose thread it is. Unset for that mark and any other.
+   */
+  group?: number;
+  /**
+   * Completed in its thread (see verdictOf), and kept, with its history: an addition or deletion
+   * accepted or rejected, a highlight or comment accepted (they can't be rejected). A run's marks
+   * all have its last one's.
+   */
   verdict: Verdict | null;
 }
 
@@ -57,11 +91,67 @@ export interface Rendered {
   code: [number, number][];
 }
 
+/** How many times to read again for openers that turned out never to close (see render). */
+const PASSES = 4;
+
 export function render(md: string): Rendered {
   const at = Array.from({ length: md.length + 1 }, (_, i) => i);
-  const out: Out = { html: [], plain: [], marks: [], code: [] };
-  blocks({ text: md, at }, out);
-  return { html: out.html.join(''), plain: out.plain, marks: out.marks, code: out.code };
+  const literal = new Set<number>();
+  for (let pass = 0; ; pass++) {
+    const out: Out = { html: [], plain: [], marks: [], code: [], open: [], literal, dead: [], sources: new Map() };
+    blocks({ text: md, at }, out);
+    // Openers that never closed are text after all: read it again with them as text.
+    const dead = [...out.dead, ...out.open.map((o) => out.marks[o.index].from)];
+    if (dead.length && pass < PASSES) {
+      for (const d of dead) literal.add(d);
+      continue;
+    }
+    for (const o of out.open) {
+      const m = out.marks[o.index];
+      m.end = m.close = m.to = md.length;
+    }
+    groupRuns(md, out.marks);
+    return { html: finish(out), plain: out.plain, marks: out.marks, code: out.code };
+  }
+}
+
+/** A mark's verdict, from its notes: a highlight's or comment's can only be "Accepted". */
+function markVerdict(kind: MarkKind, notes: readonly Note[]): Verdict | null {
+  const v = verdictOf(notes);
+  return kind === 'highlight' || kind === 'comment' ? (v === 'accepted' ? v : null) : v;
+}
+
+/** Mark `i` and the marks whose run it ends (see Mark.group), by index in `marks`. */
+export function groupOf(marks: readonly Mark[], i: number): number[] {
+  const out: number[] = [];
+  marks.forEach((m, k) => {
+    if (k === i || m.group === i) out.push(k);
+  });
+  return out;
+}
+
+/** What may stand between the marks of a run: spaces, line breaks and block markers. */
+const RUN_GAP = /^(?:\s|#{1,6}\s|[*+-]\s|\d+\.\s|>|\|)*$/;
+
+/** Sets each mark's `group` (see Mark.group). */
+function groupRuns(md: string, marks: Mark[]): void {
+  const order = marks.map((_, k) => k).sort((a, b) => marks[a].from - marks[b].from);
+  const joins = (m: Mark) => !m.code && m.kind !== 'comment';
+  for (let x = order.length - 2; x >= 0; x--) {
+    const m = marks[order[x]];
+    if (!joins(m)) continue;
+    let y = x + 1;
+    while (y < order.length && marks[order[y]].from < m.to) y++;
+    const k = order[y];
+    const n = marks[k];
+    if (!n || n.kind !== m.kind || !joins(n) || !RUN_GAP.test(md.slice(m.to, n.from))) continue;
+    const [a, b] = [m.notes[0], n.notes[0]];
+    // Signed, it is the same change only if signed the same: same author and time, and no other comment.
+    if (a && !(b && a.author && a.author === b.author && a.stamp === b.stamp && (!a.comment || a.comment === b.comment))) continue;
+    m.group = n.group ?? k;
+  }
+  // A run is one change: its marks share its last one's verdict.
+  for (const m of marks) if (m.group !== undefined) m.verdict = marks[m.group].verdict;
 }
 
 export function escapeHtml(s: string): string {
@@ -77,11 +167,34 @@ interface Src {
   at: number[];
 }
 
+/** A mark's element, opening: its tag is made once the mark's notes are known (see finish). */
+interface Tag {
+  mark: number;
+  tag: string;
+}
+
+/** A mark open, waiting for its closing delimiter (perhaps in a later block). */
+interface Open {
+  index: number;
+  d: string;
+  tag: string;
+  /** Opened in code: it closes only with signed notes. */
+  code: boolean;
+}
+
 interface Out {
-  html: string[];
+  html: (string | Tag)[];
   plain: number[];
   marks: Mark[];
   code: [number, number][];
+  /** The marks open, outermost first. */
+  open: Open[];
+  /** Openers (by markdown index) read as text: they never close. */
+  literal: Set<number>;
+  /** Openers (by markdown index) that couldn't close where they must (in their code span). */
+  dead: number[];
+  /** Each mark's notes as written, by its index. */
+  sources: Map<number, string>;
 }
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
@@ -128,6 +241,158 @@ function joinLines(ls: Src[]): Src {
   const last = ls[ls.length - 1];
   at.push(last ? last.at[last.text.length] : 0);
   return { text: parts.join(''), at };
+}
+
+// ---------------------------------------------------------------------------------------
+// Marks
+
+/** The marks: each one's delimiter (`{==` … `==}`), kind and tag. */
+const MARKS: [string, MarkKind, string][] = [
+  ['==', 'highlight', 'mark'],
+  ['--', 'strike', 'del'],
+  ['++', 'underline', 'u'],
+];
+
+type Notes = ReturnType<typeof notesAt>;
+
+/** The notes `r` found in `s`, as notes with their markdown positions. */
+function notesIn(s: Src, r: Notes): Note[] {
+  return r.notes.map((x) => noteOf(x.text, s.at[x.at], x.text ? s.at[x.at + x.text.length - 1] + 1 : s.at[x.at]));
+}
+
+/** Opens a mark with delimiter `d` (its kind's), its opening delimiter at markdown `from`, its text from `body`. */
+function openMark(out: Out, d: string, from: number, body: number, code: boolean): Open {
+  const [, kind, tag] = MARKS.find(([x]) => x === d)!;
+  const index = out.marks.push({ kind, from, body, end: body, close: body, to: body, notes: [], code, verdict: null }) - 1;
+  const o = { index, d, tag, code };
+  out.open.push(o);
+  return o;
+}
+
+/**
+ * The innermost open mark that a closing delimiter `d` closes, with signed notes or not (in
+ * code, or for a mark opened there, they must be signed); null if none. `among`, if given,
+ * limits it to those.
+ */
+function closing(out: Out, d: string, signed: boolean, inCode: boolean, among?: readonly Open[]): Open | null {
+  for (let x = out.open.length - 1; x >= 0; x--) {
+    const o = out.open[x];
+    if (o.d !== d || (among && !among.includes(o))) continue;
+    return signed || !(inCode || o.code) ? o : null;
+  }
+  return null;
+}
+
+/** Closes open mark `o`: its text ends at `end`, its closing delimiter ends at `close`, then notes `r` in `s` to `to`. */
+function closeMark(out: Out, o: Open, end: number, close: number, to: number, s: Src, r: Notes, source: string): void {
+  out.open.splice(out.open.indexOf(o), 1);
+  const m = out.marks[o.index];
+  m.end = end;
+  m.close = close;
+  m.to = to;
+  m.notes = notesIn(s, r);
+  m.verdict = markVerdict(m.kind, m.notes);
+  if (r.notes.length) out.sources.set(o.index, source);
+}
+
+/** The opening tag of mark `index`'s element (with its notes, for the first). */
+function tagHtml(out: Out, index: number, tag: string, first: boolean): string {
+  const m = out.marks[index];
+  // A resolved change shows as its outcome: an accepted addition or rejected deletion as plain
+  // text; the text an accepted deletion or rejected addition took out, not at all (still there
+  // for the source map and the serializer, but not to be edited).
+  const cls = [m.kind === 'comment' ? 'md-anchor' : '', m.notes.length ? 'noted' : '', m.verdict ?? ''].filter(Boolean).join(' ');
+  const gone = m.kind === 'comment' || m.verdict === (m.kind === 'strike' ? 'accepted' : 'rejected');
+  const base = `<${tag} data-mark="${index}"${cls ? ` class="${cls}"` : ''}${gone ? ' contenteditable="false"' : ''}`;
+  const source = first ? out.sources.get(index) : undefined;
+  return source ? `${base} data-notes="${escapeHtml(source)}">` : `${base}>`;
+}
+
+/** The HTML, each mark's tags made now that its notes are known (the first of each with them). */
+function finish(out: Out): string {
+  const seen = new Set<number>();
+  return out.html
+    .map((h) => {
+      if (typeof h === 'string') return h;
+      const first = !seen.has(h.mark);
+      seen.add(h.mark);
+      return tagHtml(out, h.mark, h.tag, first);
+    })
+    .join('');
+}
+
+/**
+ * A line of nothing but delimiters, and the notes after closing ones: `{++`, `++}{>>…<<}`. It is
+ * no block (if what it holds pairs up: see delimiterLine).
+ */
+const DELIMITER_LINE = /^ {0,3}(?:\{(?:\+\+|--|==)|(?:\+\+|--|==)\}(?:\{>>[^\n]*?<<\})*)+[ \t]*$/;
+
+/**
+ * Opens and closes the marks of the delimiter line `ls[i]` (see DELIMITER_LINE): a mark opened
+ * there has its text from the next line with any, a mark closed there to the line with text
+ * before it. False, doing nothing, if an opener there never closes or a closer closes nothing.
+ */
+function delimiterLine(ls: Src[], i: number, out: Out): boolean {
+  const l = ls[i];
+  const t = l.text;
+  const toks: { k: number; d: string; r: Notes | null }[] = [];
+  const last = t.trimEnd().length;
+  for (let k = t.length - t.trimStart().length; k < last; ) {
+    if (t[k] === '{') {
+      toks.push({ k, d: t.slice(k + 1, k + 3), r: null });
+      k += 3;
+    } else {
+      const r = notesAt(t, k + 3);
+      toks.push({ k, d: t.slice(k, k + 2), r });
+      k = r.end;
+    }
+  }
+  // Does it all pair up?
+  const open = [...out.open];
+  for (const x of toks) {
+    if (!x.r) {
+      if (out.literal.has(l.at[x.k])) return false;
+      open.push({ index: -1, d: x.d, tag: '', code: false });
+      continue;
+    }
+    const y = open.map((o) => o.d).lastIndexOf(x.d);
+    if (y < 0 || (open[y].code && notesAt(t, x.k + 3, true).end !== x.r.end)) return false;
+    open.splice(y, 1);
+  }
+  let before = i - 1;
+  while (before >= 0 && isBlank(ls[before].text)) before--;
+  let after = i + 1;
+  while (after < ls.length && isBlank(ls[after].text)) after++;
+  const end = before >= 0 ? ls[before].at[ls[before].text.length] : l.at[0];
+  const body = after < ls.length ? ls[after].at[0] : l.at[t.length];
+  for (const x of toks) {
+    if (!x.r) {
+      openMark(out, x.d, l.at[x.k], body, false);
+      continue;
+    }
+    const o = closing(out, x.d, true, false)!;
+    const r = x.r;
+    closeMark(out, o, end, l.at[x.k + 2] + 1, r.notes.length ? l.at[r.end - 1] + 1 : l.at[x.k + 2] + 1, l, r, t.slice(x.k + 3, r.end));
+  }
+  return true;
+}
+
+/** A line that opens a mark before its block markers: `{++### Title`, `{--- item`. */
+const HOISTED = /^( {0,3})\{(\+\+|--|==)((?:#{1,6}[ \t]+|[*+-][ \t]+|\d+\.[ \t]+|>[ \t]?)+)/;
+
+/**
+ * A mark opened before a line's block markers (`{++### Title`), read as if opened after them
+ * (`### {++Title`): the line is still a heading, item or quote, with its text marked. Accepted,
+ * an addition keeps its markers; rejected, the line goes, markers and all.
+ */
+function hoist(l: Src, literal: ReadonlySet<number>): Src {
+  const m = HOISTED.exec(l.text);
+  if (!m || literal.has(l.at[m[1].length])) return l;
+  const o = m[1].length;
+  const p = o + 3;
+  const q = p + m[3].length;
+  const order = (a: string | number[]) => [a.slice(0, o), a.slice(p, q), a.slice(o, p), a.slice(q)];
+  return { text: order(l.text).join(''), at: (order(l.at) as number[][]).flat() };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -228,22 +493,32 @@ function table(ls: Src[], i: number, out: Out): number {
 
 /** Whether `t`, after a list item, continues it: indented, not blank, and not an item itself. */
 export function continuesItem(t: string): boolean {
-  return /^\s/.test(t) && !isBlank(t) && !UL.test(t) && !OL.test(t);
+  return /^\s/.test(t) && !isBlank(t) && !UL.test(t) && !OL.test(t) && !DELIMITER_LINE.test(t);
 }
 
 /** Whether `t` continues a paragraph (rather than starting another block). */
 function continuesParagraph(t: string): boolean {
-  return !isBlank(t) && !ATX.test(t) && !isFence(t) && !isIndented(t) && !isRule(t) && !t.startsWith('>') && !UL.test(t) && !OL.test(t);
+  return !isBlank(t) && !ATX.test(t) && !isFence(t) && !isIndented(t) && !isRule(t) && !t.startsWith('>') && !UL.test(t) && !OL.test(t) && !DELIMITER_LINE.test(t);
 }
 
 function blocks(src: Src, out: Out): void {
-  const ls = splitLines(src);
+  // (Not in fenced code, which is literal.)
+  let fenced = false;
+  const ls = splitLines(src).map((l) => {
+    if (isFence(l.text)) fenced = !fenced;
+    return fenced || isFence(l.text) ? l : hoist(l, out.literal);
+  });
   let i = 0;
   while (i < ls.length) {
     const line = ls[i];
     const t = line.text;
 
     if (isBlank(t)) {
+      i++;
+      continue;
+    }
+
+    if (DELIMITER_LINE.test(t) && delimiterLine(ls, i, out)) {
       i++;
       continue;
     }
@@ -353,16 +628,19 @@ function code(body: Src[], out: Out): void {
   out.html.push('</code></pre>');
 }
 
+
 // ---------------------------------------------------------------------------------------
 // Inline
 
 interface Span {
   start: number;
   end: number;
-  open: string;
+  open: string | Tag;
   close: string;
   /** The tag to reopen with after closing it under a crossing span (default: `open`). */
   reopen?: string;
+  /** Order made: of spans over the same text, the earlier is the outer. */
+  seq: number;
 }
 
 const HIDDEN = 1; // a delimiter: not output
@@ -372,12 +650,6 @@ const IMAGE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
 const LINK = /\[([^\]]+)\]\(([^)\s]+)\)/g;
 const SPACE = /\s/;
 const WORD = /[\p{L}\p{N}]/u;
-/** The marks: each one's delimiter (`{==` … `==}`), kind and tag. */
-const MARKS: [string, MarkKind, string][] = [
-  ['==', 'highlight', 'mark'],
-  ['--', 'strike', 'del'],
-  ['++', 'underline', 'u'],
-];
 
 /** Pairs of delimiters, in parse order (longer runs first so `***` isn't read as `**` + `*`). */
 const PAIRS: [string, string, string][] = [
@@ -389,10 +661,10 @@ const PAIRS: [string, string, string][] = [
   ['_', '<em>', '</em>'],
 ];
 
-type Notes = ReturnType<typeof notesAt>;
-
 /**
  * Inline markdown. A `codeLine` (a line of a code block) is literal but for its review marks.
+ * Marks open when it starts (from earlier blocks) take it in from its start; marks still open
+ * at its end run on into the next.
  */
 function inline(s: Src, out: Out, codeLine = false): void {
   const t = s.text;
@@ -400,6 +672,7 @@ function inline(s: Src, out: Out, codeLine = false): void {
   const flag = new Uint8Array(n);
   const spans: Span[] = [];
   const inserts = new Map<number, string>();
+  let seq = 0;
 
   const free = (i: number, len: number) => {
     if (i < 0 || i + len > n) return false;
@@ -407,32 +680,52 @@ function inline(s: Src, out: Out, codeLine = false): void {
     return true;
   };
   const hide = (i: number, len: number) => flag.fill(HIDDEN, i, i + len);
-  const span = (start: number, end: number, open: string, close: string, reopen?: string) => {
-    if (start < end) spans.push({ start, end, open, close, reopen });
+  const span = (start: number, end: number, open: string | Tag, close: string, reopen?: string) => {
+    if (start < end) spans.push({ start, end, open, close, reopen, seq: seq++ });
   };
+  /** Where each open mark's element starts here: at 0 for one open from an earlier block. */
+  const starts = new Map<Open, number>(out.open.map((o) => [o, 0]));
 
-  /** Records the mark of `kind` from `t[k]` whose closing delimiter is at `j`, then its notes. */
-  const markAt = (k: number, j: number, r: Notes, kind: MarkKind, tag: string, code: boolean) => {
+  /** Opens a mark at `t[k]`, unless that opener is text (see render). */
+  const opener = (k: number, code: boolean): Open | null => {
+    const d = MARKS.find(([x]) => t[k] === '{' && t.startsWith(x, k + 1))?.[0];
+    if (!d || out.literal.has(s.at[k])) return null;
+    const o = openMark(out, d, s.at[k], s.at[k + 2] + 1, code);
+    starts.set(o, k + 3);
     hide(k, 3);
-    hide(j, r.end - j);
-    const html = record(kind, s.at[k], s.at[r.end - 1] + 1, s.at[k + 3], s.at[j], lead(r), t.slice(j + 3, r.end), tag, code);
-    span(k + 3, j, html.open, `</${tag}>`, html.reopen);
+    return o;
+  };
+  /** Closes the mark the closing delimiter at `t[k]` closes, its notes `r` after it; false if none. */
+  const closer = (k: number, r: Notes, inCode: boolean, among?: readonly Open[]): boolean => {
+    const d = MARKS.find(([x]) => t.startsWith(`${x}}`, k))?.[0];
+    if (!d) return false;
+    const signed = notesAt(t, k + 3, true);
+    const o = closing(out, d, signed.notes.length > 0 && signed.end === r.end, inCode, among);
+    if (!o) return false;
+    hide(k, r.end - k);
+    closeMark(out, o, s.at[k], s.at[k + 2] + 1, r.notes.length ? s.at[r.end - 1] + 1 : s.at[k + 2] + 1, s, r, t.slice(k + 3, r.end));
+    span(starts.get(o) ?? 0, k, { mark: o.index, tag: o.tag }, `</${o.tag}>`);
+    starts.delete(o);
+    return true;
   };
   /** Records the comment anchored at `t[k]`: notes after no mark. */
   const anchorAt = (k: number, r: Notes, code: boolean) => {
     hide(k, r.end - k);
     const at = s.at[k];
-    const html = record('comment', at, s.at[r.end - 1] + 1, at, at, lead(r), t.slice(k, r.end), 'span', code);
-    inserts.set(k, `${inserts.get(k) ?? ''}${html.open}</span>`);
+    const index = out.marks.push({ kind: 'comment', from: at, to: s.at[r.end - 1] + 1, notes: notesIn(s, r), body: at, end: at, close: at, code, verdict: null }) - 1;
+    out.marks[index].verdict = markVerdict('comment', out.marks[index].notes);
+    out.sources.set(index, t.slice(k, r.end));
+    inserts.set(k, `${inserts.get(k) ?? ''}${tagHtml(out, index, 'span', true)}</span>`);
   };
-  const lead = (r: Notes) => r.notes.map((x) => noteOf(x.text, s.at[x.at], x.text ? s.at[x.at + x.text.length - 1] + 1 : s.at[x.at]));
 
   /**
-   * The review marks in code text [a, b) (a code span's, or a code line's), nested ones too: a
-   * mark ends at the first closing delimiter that signed notes follow; signed notes after no
-   * mark are an anchored comment. Anything else is code.
+   * The review marks in code text [a, b) (a code span's, or a code line's): a mark there opens
+   * at any opener and closes only with signed notes, as does one opened in code anywhere; signed
+   * notes after no mark are an anchored comment. Anything else is code. In a code span, a mark
+   * opened there closes there or not at all.
    */
   const codeMarks = (a: number, b: number, inSpan: boolean) => {
+    const mine: Open[] = [];
     for (let k = a; k < b; k++) {
       if (t.startsWith('{>>', k)) {
         const r = notesAt(t, k, true);
@@ -442,23 +735,22 @@ function inline(s: Src, out: Out, codeLine = false): void {
         }
         continue;
       }
-      const m = t[k] === '{' ? MARKS.find(([d]) => t.startsWith(d, k + 1)) : undefined;
-      if (!m) continue;
-      const close = `${m[0]}}`;
-      let found: [number, Notes] | null = null;
-      for (let j = k + 4; j + 3 <= b && t[j] !== '\n' && !(inSpan && t[j] === '`'); j++) {
-        if (!t.startsWith(close, j)) continue;
-        const r = notesAt(t, j + 3, true);
-        if (r.notes.length && r.end <= b) {
-          found = [j, r];
-          break;
-        }
+      const o = opener(k, true);
+      if (o) {
+        mine.push(o);
+        k += 2;
+        continue;
       }
-      if (!found) continue;
-      const [j, r] = found;
-      markAt(k, j, r, m[1], m[2], true);
-      codeMarks(k + 3, j, inSpan);
-      k = r.end - 1;
+      const r = notesAt(t, k + 3, true);
+      if (r.notes.length && r.end <= b && closer(k, r, true, inSpan ? mine : undefined)) k = r.end - 1;
+    }
+    if (inSpan) {
+      for (const o of mine) {
+        if (!out.open.includes(o)) continue;
+        out.dead.push(out.marks[o.index].from);
+        out.open.splice(out.open.indexOf(o), 1);
+        starts.delete(o);
+      }
     }
   };
 
@@ -527,20 +819,18 @@ function inline(s: Src, out: Out, codeLine = false): void {
       span(i + 1, textEnd, `<a href="${escapeHtml(m[2])}" target="_blank" rel="noopener">`, '</a>');
     }
 
-    // Review marks: each ends at its first closing delimiter, on its line.
-    for (const [d, kind, tag] of MARKS) {
-      const open = `{${d}`;
-      const close = `${d}}`;
-      for (let i = 0; i + 3 <= n; i++) {
-        if (!t.startsWith(open, i) || !free(i, 3)) continue;
-        let j = i + 4;
-        while (j + 3 <= n && t[j - 1] !== '\n' && !(t.startsWith(close, j) && free(j, 3))) j++;
-        if (j + 3 > n || t[j - 1] === '\n') continue;
-        const r = runs.get(j + 3) ?? { notes: [], end: j + 3 };
-        runs.delete(j + 3);
-        markAt(i, j, r, kind, tag, false);
-        i = r.end - 1;
+    // Review marks, in order: an opener opens one; a closer closes the innermost open of its
+    // kind, from here or an earlier block.
+    for (let i = 0; i + 3 <= n; i++) {
+      if (!free(i, 3)) continue;
+      if (opener(i, false)) {
+        i += 2;
+        continue;
       }
+      const r = runs.get(i + 3) ?? { notes: [], end: i + 3 };
+      if (!closer(i, r, false)) continue;
+      runs.delete(i + 3);
+      i = r.end - 1;
     }
     for (const [i, r] of runs) anchorAt(i, r, false);
 
@@ -548,7 +838,7 @@ function inline(s: Src, out: Out, codeLine = false): void {
     // "2 * 3 * 4" stays literal), and the pair must enclose something.
     for (const [d, open, close] of PAIRS) {
       const len = d.length;
-      let opener = -1;
+      let from = -1;
       for (let i = 0; i + len <= n; i++) {
         if (!t.startsWith(d, i) || !free(i, len)) continue;
         const before = t[i - 1];
@@ -557,13 +847,13 @@ function inline(s: Src, out: Out, codeLine = false): void {
         const canClose = before !== undefined && !SPACE.test(before);
         const intraword = d === '_' && canOpen && canClose && WORD.test(before) && WORD.test(after);
         if (!intraword) {
-          if (opener !== -1 && canClose && i > opener + len) {
-            hide(opener, len);
+          if (from !== -1 && canClose && i > from + len) {
+            hide(from, len);
             hide(i, len);
-            span(opener + len, i, open, close);
-            opener = -1;
+            span(from + len, i, open, close);
+            from = -1;
           } else if (canOpen) {
-            opener = i;
+            from = i;
           }
         }
         i += len - 1;
@@ -571,20 +861,10 @@ function inline(s: Src, out: Out, codeLine = false): void {
     }
   }
 
-  /**
-   * Adds a mark to `out.marks`, `source` being its notes' text; returns its opening tag (with
-   * its notes, for the serializer) and the tag to reopen it with.
-   */
-  function record(kind: MarkKind, from: number, to: number, body: number, end: number, notes: Note[], source: string, tag: string, code: boolean) {
-    const verdict = kind === 'highlight' || kind === 'comment' ? null : verdictOf(notes);
-    const index = out.marks.push({ kind, from, to, notes, body, end, code, verdict }) - 1;
-    // A resolved change shows as its outcome: an accepted addition or rejected deletion as plain
-    // text; the text an accepted deletion or rejected addition took out, not at all (still there
-    // for the source map and the serializer, but not to be edited).
-    const cls = [kind === 'comment' ? 'md-anchor' : '', notes.length ? 'noted' : '', verdict ?? ''].filter(Boolean).join(' ');
-    const gone = kind === 'comment' || verdict === (kind === 'strike' ? 'accepted' : 'rejected');
-    const base = `<${tag} data-mark="${index}"${cls ? ` class="${cls}"` : ''}${gone ? ' contenteditable="false"' : ''}`;
-    return { open: notes.length ? `${base} data-notes="${escapeHtml(source)}">` : `${base}>`, reopen: `${base}>` };
+  // Marks still open run on to the end (and into the next block), outermost first.
+  for (const o of out.open) {
+    const at = starts.get(o);
+    if (at !== undefined) span(at, n, { mark: o.index, tag: o.tag }, `</${o.tag}>`);
   }
 
   // Emit, keeping tags well nested: when a span closes under others, close those too and
@@ -612,10 +892,11 @@ function inline(s: Src, out: Out, codeLine = false): void {
   };
 
   for (let i = 0; i <= n; i++) {
-    for (const sp of (closes.get(i) ?? []).sort((a, b) => b.start - a.start)) closeSpan(sp);
+    // Inner first: the later opened, of those over the same text.
+    for (const sp of (closes.get(i) ?? []).sort((a, b) => b.start - a.start || b.seq - a.seq)) closeSpan(sp);
     const ins = inserts.get(i);
     if (ins) html.push(ins);
-    for (const sp of (opens.get(i) ?? []).sort((a, b) => b.end - a.end)) {
+    for (const sp of (opens.get(i) ?? []).sort((a, b) => b.end - a.end || a.seq - b.seq)) {
       html.push(sp.open);
       active.push(sp);
     }

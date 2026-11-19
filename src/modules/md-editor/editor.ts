@@ -1,9 +1,9 @@
-import { NxButton, NxPopover, NxScroller, NxSwitch, NxTabs, NxTextField, Widget, h } from '../widgets';
-import { CHANGES, applyAction, commentOn, editNote, marksAt, type ActionId } from './actions';
-import { Review, markKeys, type Box, type Extent } from './review';
+import { NxButton, NxScroller, NxSwitch, NxTabs, Widget, h } from '../widgets';
+import { ALL_MARKS, CHANGES, applyAction, commentOn, editNote, marksAt, purgeMark, resolveMark, unmark, type ActionId } from './actions';
+import { Review, keyOf, markOf, type Box, type Extent } from './review';
 import { TextIndex, lowerBound, midY, pointRect, rangeRect } from './geometry';
-import { makeNote } from './notes';
-import { escapeHtml, render, type Mark, type MarkKind, type Rendered } from './parse';
+import { makeNote, verdictNote } from './notes';
+import { escapeHtml, groupOf, render, type Mark, type MarkKind, type Rendered } from './parse';
 import { toMarkdown, type DomPoint } from './serialize';
 import { trackedEdit } from './track';
 import { IS_MAC, TOOLS, toolForKey, toolTitle, type ToolId } from './toolbar';
@@ -33,17 +33,21 @@ export interface MarkdownEditorOptions {
   onSave?: () => void;
   onModeChange?: (mode: MdMode) => void;
   /**
-   * Start with Review Mode on or off. On: changes, highlights and threads are shown (in their
-   * colours, with the review column). Off: Visual shows the text as if every open change were
-   * accepted, Raw shows it uncoloured, and Track Changes, Accept and Reject are off. Default: on
-   * if the document has any change or highlight.
+   * The Editor's Hide Completed: completed marks — changes accepted or rejected, comments
+   * accepted — have no box in the review column (their text shows their outcome either way).
+   * Default: on.
    */
-  annotations?: boolean;
+  hideCompleted?: boolean;
   /**
-   * Review Mode was turned on or off: by the user (`manual`, to remember for next time), or
-   * because they highlighted or used the Track Changes button, which always turn it on.
+   * The Preview's Include Pending Changes: changes not yet accepted or rejected show as if
+   * accepted (else as if rejected). Default: on.
    */
-  onAnnotationsChange?: (on: boolean, manual: boolean) => void;
+  includePending?: boolean;
+  /**
+   * Asks the user to confirm (Purge All Completed Items): resolves true to go ahead. Default: the
+   * browser's `confirm`.
+   */
+  confirm?: (message: string, ok: string) => Promise<boolean>;
   /**
    * Show spelling errors (the toolbar's Show Spelling Errors button): Visual's text is spell-checked,
    * code excepted. Raw never is: a textarea is checked all or nothing, so its code and threads
@@ -79,31 +83,43 @@ const SYNC_DELAY = 150;
 /** Within this fraction of a viewport of either end, scroll positions pin to that end. */
 const EDGE_ZONE = 0.6;
 
+/** The views, as the tabs show them: Editor, Preview, Source. */
+const MODES: readonly MdMode[] = ['visual', 'preview', 'raw'];
+/** Tools whose enabled state follows the document (updateUndo, updateAccept, updateTrack). */
+const STATE_TOOLS = new Set<ToolId>(['undo', 'redo', 'track', 'accept', 'reject', 'acceptAll', 'purge', 'purgeAll']);
+
 const MARK_CLASS: Record<MarkKind, string> = { highlight: 'mk-hl', strike: 'mk-st', underline: 'mk-un', comment: 'mk-hl' };
 /** How many author colours there are (`--md-author-1` …, in md-editor.css); then they repeat. */
 const AUTHOR_COLORS = 8;
 
 /**
- * Each change's colour (by index in `marks`; null for highlights and comments), as Word colours changes by
- * author: one colour per author for both additions and deletions. Authors take the colours in
- * the order of their first change (by its time; changes with no time after, in document order;
- * changes with no author count as one more author), so a colour stays with its author as
- * edits are made, and a new author takes the next one.
+ * Each author's colour, as Word colours changes by author — their additions, deletions,
+ * highlights and comments alike. Authors take the colours in the order of their first mark (by
+ * its time; marks with no time after, in document order; marks with no author count as one
+ * more author), so a colour stays with its author as edits are made, and a new author takes the
+ * next one. `of(author)` gives anyone's, one who has made no mark yet taking the next colour.
  */
-function authorColors(marks: Mark[]): (string | null)[] {
-  const changes = marks.filter((m) => m.kind === 'strike' || m.kind === 'underline');
+function authorPalette(marks: readonly Mark[]): { marks: (string | null)[]; of: (author: string) => string } {
+  // A run's marks are its last one's (see Mark.group).
+  const lead = (m: Mark) => (m.group === undefined ? m : marks[m.group]);
   const first = new Map<string, { time: number; at: number }>();
-  for (const m of changes) {
-    const who = m.notes[0]?.author ?? '';
-    const time = m.notes[0]?.time ?? Infinity;
+  for (const m of marks) {
+    const who = lead(m).notes[0]?.author ?? '';
+    const time = lead(m).notes[0]?.time ?? Infinity;
     const seen = first.get(who);
     if (!seen || time < seen.time || (time === seen.time && m.from < seen.at)) first.set(who, { time, at: m.from });
   }
   const order = [...first].sort(([, a], [, b]) => a.time - b.time || a.at - b.at).map(([who]) => who);
-  return marks.map((m) =>
-    m.kind === 'highlight' || m.kind === 'comment' ? null : `var(--md-author-${(order.indexOf(m.notes[0]?.author ?? '') % AUTHOR_COLORS) + 1})`,
-  );
+  const of = (who: string) => {
+    const k = order.indexOf(who);
+    return `var(--md-author-${((k < 0 ? order.length : k) % AUTHOR_COLORS) + 1})`;
+  };
+  return { marks: marks.map((m) => of(lead(m).notes[0]?.author ?? '')), of };
 }
+
+/** Each mark's colour (by index in `marks`): its author's (see authorPalette). */
+const authorColors = (marks: readonly Mark[]): (string | null)[] => authorPalette(marks).marks;
+
 /** The elements each kind of mark renders as (or is pasted as) in Visual. */
 const MARK_TAGS: Record<MarkKind, string> = { highlight: 'mark', strike: 'del, s, strike', underline: 'u, ins', comment: '.md-anchor' };
 
@@ -166,20 +182,19 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
 
   /** The review column: marks' threads in boxes beside the text. */
   private readonly review: Review;
-  /** Review Mode: changes, highlights and the review column shown (else the text as if accepted). */
-  private showAnnotations: boolean;
-  private readonly annotationSwitch: NxSwitch;
+  /** The Editor's Hide Completed (see the options). */
+  private hideDone: boolean;
+  /** The Preview's Include Pending Changes (see the options). */
+  private withPending: boolean;
+  private readonly hideSwitch: NxSwitch;
+  private readonly pendingSwitch: NxSwitch;
   /** The markdown Visual was last rendered from (its marks are `shown.marks`). */
   private shownMd = '';
-  private colorCache: { marks: readonly Mark[]; colors: (string | null)[] } | null = null;
-  /** The highlight comment prompt, while open. */
-  private prompt: NxPopover | null = null;
+  private colorCache: { marks: readonly Mark[]; palette: ReturnType<typeof authorPalette> } | null = null;
   /** Track Changes is on (only ever with a user). */
   private tracking: boolean;
   /** Spelling errors are shown (in Visual). */
   private spelling: boolean;
-  /** Puts back the selection the prompt took focus from. */
-  private restoreFocus: (() => void) | null = null;
 
   constructor(o: MarkdownEditorOptions = {}) {
     super(h('div'), 'md-editor');
@@ -206,17 +221,17 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
       if (g.childElementCount) toolbar.append(g);
     }
     this.tabs = new NxTabs({
-      tabs: ['Visual', 'Raw'],
-      selected: this.current === 'raw' ? 1 : 0,
-      onSelect: (i) => (this.mode = i ? 'raw' : 'visual'),
+      tabs: ['Editor', 'Preview', 'Source'],
+      selected: MODES.indexOf(this.current),
+      onSelect: (i) => (this.mode = MODES[i]),
     });
-    this.showAnnotations = o.annotations ?? render(this.md).marks.length > 0;
-    // No tracking outside Review Mode.
-    if (!this.showAnnotations) this.tracking = false;
-    this.annotationSwitch = new NxSwitch({ label: 'Review Mode', on: this.showAnnotations, onChange: (on) => this.setAnnotations(on, true) });
-    this.annotationSwitch.el.classList.add('md-annotations');
-    header.append(toolbar, this.tabs.el, this.annotationSwitch.el);
-    this.el.classList.toggle('md-plain', !this.showAnnotations);
+    // Each view's own check box, in the same place at the right of the tabs.
+    this.hideDone = o.hideCompleted ?? true;
+    this.withPending = o.includePending ?? true;
+    this.hideSwitch = new NxSwitch({ label: 'Hide Completed', on: this.hideDone, onChange: (on) => (this.hideCompleted = on) });
+    this.pendingSwitch = new NxSwitch({ label: 'Include Pending Changes', on: this.withPending, onChange: (on) => (this.includePending = on) });
+    for (const sw of [this.hideSwitch, this.pendingSwitch]) sw.el.classList.add('md-view-option');
+    header.append(toolbar, this.tabs.el, this.hideSwitch.el, this.pendingSwitch.el);
 
     // Document: one scroller holding both views (only one shown).
     this.scroller = h('div', { className: 'md-scroll' });
@@ -233,9 +248,16 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
         marks: () => this.reviewMarks(),
         extent: (i) => this.markExtent(i),
         color: (i) => this.markColor(i),
-        enabled: () => this.showAnnotations,
+        noteColor: (author) => (author ? this.palette().of(author) : null),
+        enabled: () => this.current !== 'preview',
+        visible: (m) => this.current === 'raw' || !this.hideDone || !m.verdict,
         comment: (key, text) => this.addComment(key, text),
         edit: (key, index, text) => this.editComment(key, index, text),
+        hover: (i) => this.shade(i),
+        resolve: (key, accept, comment) => this.resolveChange(key, accept, comment),
+        purge: (key) => this.changeThread(key, (md, m) => purgeMark(md, m)),
+        opened: () => this.updateAccept(),
+        cancel: (key) => void this.changeThread(key, (md, m) => unmark(md, m)),
         spellcheck: () => this.spellcheck,
       },
       this.scroller,
@@ -316,7 +338,6 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   /** Switches views, keeping the selection and the visible text in place. */
   set mode(next: MdMode) {
     if (next === this.current) return;
-    this.closePrompt();
     this.checkpoint();
     const { anchor, focus, view } = this.captureView();
     this.current = next;
@@ -351,24 +372,27 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     else this.parkSelection(anchor, focus);
   }
 
-  /** Review Mode (see `annotations` in the options). */
-  get annotations(): boolean {
-    return this.showAnnotations;
+  /** The Editor's Hide Completed (see the options). */
+  get hideCompleted(): boolean {
+    return this.hideDone;
   }
-  set annotations(on: boolean) {
-    this.setAnnotations(on, false);
-  }
-
-  private setAnnotations(on: boolean, manual: boolean): void {
-    if (on === this.showAnnotations) return;
-    this.showAnnotations = on;
-    this.annotationSwitch.on = on;
-    this.el.classList.toggle('md-plain', !on);
-    if (!on && this.tracking) this.trackChanges = false;
-    if (this.current === 'visual') this.markGone();
+  set hideCompleted(on: boolean) {
+    if (on === this.hideDone) return;
+    this.hideDone = on;
+    this.hideSwitch.on = on;
     this.updateAccept();
     this.review.schedule();
-    this.opts.onAnnotationsChange?.(on, manual);
+  }
+
+  /** The Preview's Include Pending Changes (see the options). */
+  get includePending(): boolean {
+    return this.withPending;
+  }
+  set includePending(on: boolean) {
+    if (on === this.withPending) return;
+    this.withPending = on;
+    this.pendingSwitch.on = on;
+    if (this.current === 'preview') this.markGone();
   }
 
   /** Track Changes: whether the user's edits are recorded as additions and deletions. */
@@ -395,8 +419,6 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     this.checkpoint();
     const was = this.tracking;
     this.tracking = on && !!this.opts.user;
-    // Tracking needs Review Mode, to see what it records.
-    if (this.tracking) this.setAnnotations(true, false);
     this.updateTrack();
     if (was && !this.tracking) this.leaveAddition();
   }
@@ -484,15 +506,14 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
    * (if set), with `comment` if given.
    */
   exec(id: ActionId, comment = ''): void {
-    // So does highlighting.
-    if (id === 'highlight') this.setAnnotations(true, false);
+    if (this.current === 'preview') return;
     this.checkpoint();
     const { anchor, focus } = this.selection();
     this.history[this.pos] = { md: this.md, anchor, focus };
     const user = this.opts.user;
     const verdict = id === 'accept' || id === 'acceptAll' ? 'Accepted' : id === 'reject' ? 'Rejected' : null;
     const note = !user ? '' : id === 'highlight' ? makeNote(user, comment) : verdict ? makeNote(user, verdict) : '';
-    const e = applyAction(id, this.md, Math.min(anchor, focus), Math.max(anchor, focus), this.current, note);
+    const e = applyAction(id, this.md, Math.min(anchor, focus), Math.max(anchor, focus), this.current, note, !this.doneShown());
     this.md = e.md;
     this.renderCurrent();
     this.setSelection(e.anchor, e.focus);
@@ -503,11 +524,13 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   }
 
   undo(): void {
+    if (this.current === 'preview') return;
     this.checkpoint();
     if (this.pos > 0) this.restore(this.history[--this.pos]);
   }
 
   redo(): void {
+    if (this.current === 'preview') return;
     this.checkpoint();
     if (this.pos < this.history.length - 1) this.restore(this.history[++this.pos]);
   }
@@ -517,7 +540,6 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     clearTimeout(this.syncTimer);
     document.removeEventListener('selectionchange', this.onSelectionChange);
     this.resizes.disconnect();
-    this.closePrompt();
     this.review.destroy();
     super.destroy();
   }
@@ -533,10 +555,26 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   /** Shows the current view, rendered from `md`. */
   private show(): void {
     const raw = this.current === 'raw';
+    const preview = this.current === 'preview';
     this.visual.hidden = raw;
     this.rawPanel.hidden = !raw;
-    this.tabs.selected = raw ? 1 : 0;
+    this.tabs.selected = MODES.indexOf(this.current);
+    // Preview is Visual, read-only, without the review markup (see md-editor.css).
+    this.visual.contentEditable = preview ? 'false' : 'true';
+    this.el.classList.toggle('md-previewing', preview);
+    this.hideSwitch.el.hidden = this.current !== 'visual';
+    this.pendingSwitch.el.hidden = !preview;
     this.renderCurrent();
+    this.updateTools();
+  }
+
+  /** Every tool but Save and Show Spelling Errors is off in Preview, which can't be edited. */
+  private updateTools(): void {
+    const preview = this.current === 'preview';
+    for (const [id, b] of this.buttons) if (!STATE_TOOLS.has(id) && id !== 'save' && id !== 'spelling') b.disabled = preview;
+    this.updateUndo();
+    this.updateAccept();
+    this.updateTrack();
   }
 
   private renderCurrent(): void {
@@ -548,6 +586,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     const r = this.rendered();
     this.visual.innerHTML = r.html;
     const colors = authorColors(r.marks);
+    this.showUserColor(r.marks);
     for (const el of this.visual.querySelectorAll<HTMLElement>('[data-mark]')) {
       const c = colors[Number(el.dataset.mark)];
       if (c) el.style.setProperty('--md-change', c);
@@ -568,22 +607,38 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
 
   /**
    * Marks the changes whose text isn't shown (`gone`, hidden by md-editor.css, and not to be
-   * edited): what a resolved change took out — and, outside Review Mode, what every change still
-   * open would take out if accepted (its deletions). Then closes the gaps they leave.
+   * edited): what a completed change took out — and, in Preview, what every change still pending
+   * would take out if accepted (with Include Pending Changes; else if rejected). Then closes the
+   * gaps they leave.
    */
   private markGone(): void {
     for (const el of this.visual.querySelectorAll<HTMLElement>(CHANGES.map((k) => MARK_TAGS[k]).join(', '))) {
       if (!el.hasAttribute('data-mark')) continue;
       const deletion = el.matches(MARK_TAGS.strike);
       const verdict = el.classList.contains('accepted') ? 'accepted' : el.classList.contains('rejected') ? 'rejected' : null;
-      const outcome = verdict ?? (this.showAnnotations ? null : 'accepted');
+      const outcome = verdict ?? (this.current !== 'preview' ? null : this.withPending ? 'accepted' : 'rejected');
       const gone = outcome === (deletion ? 'accepted' : 'rejected');
       el.classList.toggle('gone', gone);
       if (gone) el.contentEditable = 'false';
       else el.removeAttribute('contenteditable');
       el.style.marginLeft = el.style.marginRight = '';
     }
+    // A block whose text all goes (a change running over several blocks takes some out whole)
+    // goes too, rather than stand empty.
+    for (const block of this.visual.querySelectorAll<HTMLElement>('p, li, h1, h2, h3, h4, h5, h6, pre, blockquote, table')) {
+      const texts = this.textsIn(block);
+      const all = texts.length > 0 && texts.every((t) => !/\S/.test(t.data) || !!t.parentElement?.closest('.gone'));
+      block.classList.toggle('gone-block', all && texts.some((t) => /\S/.test(t.data)));
+    }
     this.closeGaps();
+  }
+
+  /** The text nodes in `el`. */
+  private textsIn(el: Element): Text[] {
+    const out: Text[] = [];
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) out.push(n as Text);
+    return out;
   }
 
   /**
@@ -642,14 +697,15 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     const text = this.textarea.value;
     const marks = this.rendered().marks; // text === md in Raw
     const colors = authorColors(marks);
+    this.showUserColor(marks);
     const ranges = [
       // A mark, to its closing delimiter; then its notes, in the change's colour (a highlight's
       // highlighted too; an anchored comment is all notes, and highlighted).
-      ...marks.map((m, k) => ({ from: m.from, to: m.kind === 'comment' ? m.to : m.end + 3, cls: MARK_CLASS[m.kind], color: colors[k] })),
+      ...marks.map((m, k) => ({ from: m.from, to: m.kind === 'comment' ? m.to : m.close, cls: MARK_CLASS[m.kind], color: colors[k] })),
       ...marks
         .map((m, k) => ({ m, k }))
         .filter(({ m }) => m.kind !== 'comment' && m.notes.length)
-        .map(({ m, k }) => ({ from: m.end + 3, to: m.to, cls: m.kind === 'highlight' ? 'mk-hl' : 'mk-nc', color: colors[k] })),
+        .map(({ m, k }) => ({ from: m.close, to: m.to, cls: m.kind === 'highlight' ? 'mk-hl' : 'mk-nc', color: colors[k] })),
     ];
     const cuts = [...new Set([0, text.length, ...ranges.flatMap((m) => [m.from, m.to])])].sort((a, b) => a - b);
     let html = '';
@@ -970,14 +1026,16 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   }
 
   private updateUndo(): void {
-    this.buttons.get('undo')!.disabled = !(this.pos > 0 || this.pending);
-    this.buttons.get('redo')!.disabled = this.pending || this.pos >= this.history.length - 1;
+    const preview = this.current === 'preview';
+    this.buttons.get('undo')!.disabled = preview || !(this.pos > 0 || this.pending);
+    this.buttons.get('redo')!.disabled = preview || this.pending || this.pos >= this.history.length - 1;
   }
 
   // -------------------------------------------------------------------------------------
   // Events
 
   private command(id: ToolId): void {
+    if (this.current === 'preview' && id !== 'save' && id !== 'spelling') return;
     if (id === 'undo') this.undo();
     else if (id === 'redo') this.redo();
     else if (id === 'highlight') this.highlight();
@@ -985,13 +1043,29 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
       this.spellcheck = !this.spelling;
       this.opts.onSpellcheckChange?.(this.spelling);
     }
-    else if (id === 'track') {
-      // Using Track Changes always brings the annotations back into view.
-      this.setAnnotations(true, false);
-      this.trackChanges = !this.tracking;
-    }
+    else if (id === 'track') this.trackChanges = !this.tracking;
     else if (id === 'save') this.save();
+    // Accept, Reject and Purge act on the mark whose box is open, if it is one they apply to.
+    else if (id === 'accept' && this.boxMark()?.verdict === null && this.review.act(id)) return;
+    else if (id === 'reject' && this.boxMark(CHANGES)?.verdict === null && this.review.act(id)) return;
+    else if (id === 'purge' && this.boxMark()?.verdict && this.review.act(id)) return;
+    else if (id === 'purgeAll') void this.purgeAll();
     else this.exec(id);
+  }
+
+  /** Purge All Completed Items, once the user confirms it. */
+  private async purgeAll(): Promise<void> {
+    const message = 'Purging all completed items will remove history of accepted and rejected changes as well as accepted comments.';
+    const ok = await (this.opts.confirm ?? (async (m: string) => window.confirm(m)))(message, 'Purge All');
+    if (ok) this.exec('purgeAll');
+  }
+
+  /**
+   * Completed marks are in view, to act on one: in Source always (their markup is there), in the
+   * Editor unless Hide Completed is on.
+   */
+  private doneShown(): boolean {
+    return this.current === 'raw' || (this.current === 'visual' && !this.hideDone);
   }
 
   /** Reports any edit still pending, then asks for a save. */
@@ -1003,7 +1077,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   private updateTrack(): void {
     const b = this.buttons.get('track')!;
     b.on = this.tracking;
-    b.disabled = !this.opts.user;
+    b.disabled = !this.opts.user || this.current === 'preview';
     this.review.schedule();
   }
 
@@ -1059,28 +1133,50 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   }
 
   /**
-   * Accept and Reject Change(s) are enabled while the selection touches an addition or deletion;
-   * Accept All Changes while there is one not yet resolved.
+   * Accept is enabled while the selection touches a change, highlight or comment, Reject a
+   * change — pending ones, or any in view (see doneShown) — and Accept All Changes while a change
+   * is pending. Purge while it touches a completed mark in view; Purge All while there is one,
+   * in view or not. The open box's mark counts as selected (the toolbar acts on it: see command).
+   * In Preview, none.
    */
   private updateAccept(): void {
-    // None of them outside Review Mode. Accept All: while any change is still open.
-    const off = !this.showAnnotations || !this.selectionTouches(CHANGES);
-    this.buttons.get('accept')!.disabled = off;
-    this.buttons.get('reject')!.disabled = off;
-    const open = this.showAnnotations && this.rendered().marks.some((m) => CHANGES.includes(m.kind) && !m.verdict);
-    this.buttons.get('acceptAll')!.disabled = !open;
+    const preview = this.current === 'preview';
+    const all = this.doneShown() ? 'any' : 'pending';
+    const box = this.boxMark();
+    // (A new comment, not yet sent, isn't one to accept.)
+    const pending = !!box && box.verdict === null && !this.review?.openFresh();
+    this.buttons.get('accept')!.disabled = preview || !(pending || this.selectionTouches(ALL_MARKS, all));
+    this.buttons.get('reject')!.disabled = preview || !((pending && !!box && CHANGES.includes(box.kind)) || this.selectionTouches(CHANGES, all));
+    const marks = this.rendered().marks;
+    this.buttons.get('acceptAll')!.disabled = preview || !marks.some((m) => CHANGES.includes(m.kind) && !m.verdict);
+    this.buttons.get('purge')!.disabled = preview || !(box?.verdict || (this.doneShown() && this.selectionTouches(ALL_MARKS, 'done')));
+    this.buttons.get('purgeAll')!.disabled = preview || !marks.some((m) => m.verdict);
   }
 
-  private selectionTouches(kinds: readonly MarkKind[]): boolean {
+  /** The mark whose box is open in the review column, if one is (and is of `kinds`). */
+  private boxMark(kinds: readonly MarkKind[] = ALL_MARKS): Mark | null {
+    const key = this.review?.openKey();
+    if (!key) return null;
+    const { md, marks } = this.reviewMarks();
+    const m = markOf(md, marks, key);
+    return m && kinds.includes(m.kind) ? m : null;
+  }
+
+  /** Whether the selection touches a mark of `kinds`: any, one not yet completed (`pending`), or a completed one (`done`). */
+  private selectionTouches(kinds: readonly MarkKind[], which: 'any' | 'pending' | 'done'): boolean {
+    const wanted = (m: Mark) => which === 'any' || (which === 'done') === !!m.verdict;
     if (this.current === 'raw') {
       const { selectionStart: s, selectionEnd: e } = this.textarea;
-      return marksAt(this.rendered().marks, s, e, kinds).length > 0;
+      return marksAt(this.rendered().marks, s, e, kinds).some(wanted);
     }
     // Visual may be mid-edit, so look at the DOM: a caret inside, or a range overlapping.
     const sel = getSelection();
     const range = sel?.rangeCount && this.visual.contains(sel.anchorNode) ? sel.getRangeAt(0) : this.savedRange;
     if (!range || !this.visual.contains(range.startContainer)) return false;
-    const tags = kinds.map((k) => MARK_TAGS[k]).join(', ');
+    const tags = kinds
+      .flatMap((k) => MARK_TAGS[k].split(', '))
+      .map((t) => (which === 'done' ? `${t}:is(.accepted, .rejected)` : which === 'pending' ? `${t}:not(.accepted, .rejected)` : t))
+      .join(', ');
     if (range.collapsed) {
       // A caret is on a change it is inside or right beside (in the same block).
       return this.textsBeside(range.startContainer, range.startOffset).some((t) => !!t?.parentElement?.closest(tags));
@@ -1120,99 +1216,59 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   }
 
   /**
-   * Highlights the selection, first asking for an optional comment (when there is a user to
-   * attribute it to). Inside an existing highlight, removes it straight away.
-   */
-  /**
-   * The highlight button: removes the highlight or comment the selection is in, or asks for a
-   * comment and highlights the selection — or, with none, anchors the comment at the caret.
+   * The highlight button: removes the highlight or comment the selection is in, or highlights
+   * the selection — or, with none, anchors a comment at the caret — signed by the user, and
+   * opens its box in the review column for the comment.
    */
   private highlight(): void {
-    if (this.prompt) return;
     this.checkpoint();
     const { anchor, focus } = this.selection();
-    const removing = marksAt(this.rendered().marks, Math.min(anchor, focus), Math.max(anchor, focus), ['highlight', 'comment']).length > 0;
-    if (!this.opts.user || removing) this.exec('highlight');
-    else if (anchor === focus) this.ask({ id: 'highlight', title: 'Comment', button: 'Comment', placeholder: 'Comment' });
-    else this.ask({ id: 'highlight', title: 'Highlight', button: 'Highlight', placeholder: 'Comment (optional)' });
-  }
-
-  /**
-   * Opens the comment prompt by the selection (a panel that can be moved by its title); on OK,
-   * runs `id` with the comment. While it is open, the document shows what `id` will do — the
-   * highlight, or the anchored comment — with the comment as typed so far in its box; Cancel
-   * takes that away again.
-   */
-  private ask(o: { id: ActionId; title: string; button: string; placeholder: string }): void {
+    const [a, b] = [Math.min(anchor, focus), Math.max(anchor, focus)];
     const user = this.opts.user;
-    if (!user) return;
-    this.flushVisual();
-    this.reveal(this.selection().focus);
-    const raw = this.current === 'raw';
-    const ends = raw ? null : this.visualEnds();
-    const at = raw ? this.layerRect(this.textarea.selectionEnd) : ends && pointRect(ends.focus);
-    const before = { md: this.md, ...this.selection() };
-    const start = Math.min(before.anchor, before.focus);
-    const end = Math.max(before.anchor, before.focus);
-    const when = new Date();
-    // The preview: drawn, but not a change (no undo step, nothing reported).
-    const preview = (comment: string) => {
-      this.md = applyAction(o.id, before.md, start, end, this.current, makeNote(user, comment, when)).md;
-      this.renderCurrent();
-    };
-    this.restoreFocus = () => {
-      if (this.md !== before.md) {
-        this.md = before.md;
-        this.renderCurrent();
-      }
-      (raw ? this.textarea : this.visual).focus({ preventScroll: true });
-      this.setSelection(before.anchor, before.focus);
-    };
-
-    const done = (v: string) => this.closePrompt(o.id, v);
-    const field = new NxTextField({ placeholder: o.placeholder, lines: 2, spellcheck: this.spellcheck, onCommit: done, onInput: preview });
-    const buttons = h('div', { className: 'md-prompt-buttons' });
-    new NxButton({ label: 'Cancel', onClick: () => this.closePrompt() }).mount(buttons);
-    new NxButton({ label: o.button, returnKey: true, onClick: () => done(field.value) }).mount(buttons);
-    const who = h('div', { className: 'md-prompt-who', textContent: `As ${user}` });
-    this.prompt = new NxPopover({ title: o.title, movable: true, onDismiss: () => this.closePrompt() });
-    this.prompt.el.classList.add('md-prompt');
-    this.prompt.setContent(field, who, buttons);
-    const box = this.scroller.getBoundingClientRect();
-    this.prompt.showAt(at ?? { left: box.left + 24, top: box.top, bottom: box.top + 24 });
-    preview('');
-    field.focus();
-  }
-
-  /** Closes the comment prompt, putting the text and selection back; with an `id`, then runs it. */
-  private closePrompt(id?: ActionId, comment = ''): void {
-    const p = this.prompt;
-    if (!p) return;
-    this.prompt = null;
-    p.destroy();
-    this.restoreFocus?.();
-    this.restoreFocus = null;
-    if (id) this.exec(id, comment);
+    const removing = marksAt(this.rendered().marks, a, b, ['highlight', 'comment']).length > 0;
+    const before = new Set(this.rendered().marks.map((m) => `${m.kind}|${m.from}|${m.to}`));
+    this.exec('highlight');
+    if (!user || removing) return;
+    // The new mark: the highlight or comment that wasn't there before.
+    const marks = this.rendered().marks;
+    const found = marks.findIndex((m) => (m.kind === 'highlight' || m.kind === 'comment') && !before.has(`${m.kind}|${m.from}|${m.to}`) && m.notes[0]?.author);
+    if (found < 0) return;
+    this.review.openNew(keyOf(this.md, marks, found));
   }
 
   /** The marks the current view shows: Visual's as last rendered (its DOM still holds them while edited), Raw's from `md`. */
   private reviewMarks(): { md: string; marks: readonly Mark[] } {
-    if (this.current === 'visual') return { md: this.shownMd, marks: this.shown?.marks ?? [] };
+    if (this.current !== 'raw') return { md: this.shownMd, marks: this.shown?.marks ?? [] };
     return { md: this.md, marks: this.rendered().marks };
+  }
+
+  /** The author colours of reviewMarks(). */
+  private palette(): ReturnType<typeof authorPalette> {
+    const { marks } = this.reviewMarks();
+    if (this.colorCache?.marks !== marks) this.colorCache = { marks, palette: authorPalette(marks) };
+    return this.colorCache.palette;
   }
 
   /** Mark `i`'s author colour, of reviewMarks(). */
   private markColor(i: number): string | null {
-    const { marks } = this.reviewMarks();
-    if (this.colorCache?.marks !== marks) this.colorCache = { marks, colors: authorColors([...marks]) };
-    return this.colorCache.colors[i] ?? null;
+    return this.palette().marks[i] ?? null;
+  }
+
+  /** The highlight button shows the user's colour (their highlights' shade). */
+  private showUserColor(marks: readonly Mark[]): void {
+    const user = this.opts.user;
+    const el = this.buttons.get('highlight')?.el;
+    if (user && el) el.style.setProperty('--md-change', authorPalette(marks).of(user));
   }
 
   /** Where mark `i` (of the current render) is on screen in the current view: its first and last lines. */
   private markExtent(i: number): Extent | null {
+    // A run's last mark stands for the run (see Mark.group): from its first mark to its last.
+    const { marks } = this.reviewMarks();
+    const run = groupOf(marks, i);
     if (this.current === 'raw') {
-      const m = this.rendered().marks[i];
-      const a = m && this.layerRect(m.from);
+      const m = marks[i];
+      const a = m && this.layerRect(Math.min(...run.map((k) => marks[k].from)));
       const b = m && this.layerRect(m.to - 1);
       if (!a || !b) return null;
       if (b.top <= a.top + 1) {
@@ -1227,7 +1283,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
         last: { left: col.left + parseFloat(css.paddingLeft), top: b.top, right: b.right, bottom: b.bottom },
       };
     }
-    const rects = Array.from(this.visual.querySelectorAll(`[data-mark="${i}"]`))
+    const rects = Array.from(this.visual.querySelectorAll(run.map((k) => `[data-mark="${k}"]`).join(', ')))
       .flatMap((el) => Array.from(el.getClientRects()))
       .filter((r) => r.width > 0 || r.height > 0);
     if (!rects.length) return null;
@@ -1252,9 +1308,44 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     return this.changeThread(key, (md, m) => commentOn(md, m, makeNote(user, text)));
   }
 
+  /**
+   * Accepts or rejects the mark with `key` (its box's buttons), as Accept and Reject do — with
+   * `comment`, in the verdict's note ("Accepted. …").
+   */
+  private resolveChange(key: string, accept: boolean, comment = ''): string | null {
+    const user = this.opts.user;
+    const note = user ? makeNote(user, verdictNote(accept ? 'accepted' : 'rejected', comment)) : '';
+    return this.changeThread(key, (md, m) => resolveMark(md, m, accept, note));
+  }
+
+  /** Shades mark `i`'s text in Visual (its run's, all of it), as pointed at here or in its box; null: none. */
+  private shade(i: number | null): void {
+    for (const el of this.visual.querySelectorAll('.md-hot')) el.classList.remove('md-hot');
+    if (i === null || this.current !== 'visual') return;
+    const marks = this.shown?.marks ?? [];
+    // A completed mark hidden from review (Hide Completed) is just text: nothing to point at.
+    if (!marks[i] || (marks[i].verdict && this.hideDone)) return;
+    for (const k of groupOf(marks, i)) for (const el of this.visual.querySelectorAll(`[data-mark="${k}"]`)) el.classList.add('md-hot');
+  }
+
   /** Changes note `index` of the mark with `key` to say `text` (anyone's note), keeping the selection. */
   private editComment(key: string, index: number, text: string): string | null {
-    return this.changeThread(key, (md, m) => editNote(md, m, index, text));
+    return this.changeThread(key, (md, m) => {
+      if (index > 0) return editNote(md, m, index, text);
+      // The first note: on every mark of its run that has it (from the last, so the others stay put).
+      const marks = render(md).marks;
+      const run = groupOf(marks, marks.findIndex((x) => x.kind === m.kind && x.from === m.from))
+        .map((k) => marks[k])
+        .filter((x) => x.notes.length)
+        .sort((x, y) => y.from - x.from);
+      const maps: ((p: number) => number)[] = [];
+      for (const x of run) {
+        const r = editNote(md, x, 0, text);
+        md = r.md;
+        maps.push(r.map);
+      }
+      return { md, map: (p) => maps.reduce((q, f) => f(q), p) };
+    });
   }
 
   /**
@@ -1271,7 +1362,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     const focused = !!a && (this.visual.contains(a) || a === this.textarea);
     const sel = this.selection();
     const marks = this.rendered().marks;
-    const m = marks[markKeys(this.md, marks).indexOf(key)];
+    const m = markOf(this.md, marks, key);
     if (!m) return null;
     this.history[this.pos] = { md: this.md, ...sel };
     const r = change(this.md, m);
@@ -1286,9 +1377,10 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
     this.emit();
     this.updateAccept();
     // The same mark, where it now starts.
-    const after = this.rendered().marks.find((x) => x.kind === m.kind && x.from === m.from);
+    const from = r.map(m.from);
+    const after = this.rendered().marks.find((x) => x.kind === m.kind && x.from === from);
     const now = this.rendered().marks;
-    return after ? markKeys(this.md, now)[now.indexOf(after)] : null;
+    return after ? keyOf(this.md, now, now.indexOf(after)) : null;
   }
 
   private emit(): void {
@@ -1432,7 +1524,7 @@ export class MarkdownEditor extends Widget<HTMLDivElement> {
   };
 
   private readonly onSelectionChange = () => {
-    if (this.current !== 'visual') return;
+    if (this.current === 'raw') return;
     const sel = getSelection();
     if (sel?.rangeCount && this.visual.contains(sel.anchorNode)) this.savedRange = sel.getRangeAt(0).cloneRange();
     this.updateAccept();

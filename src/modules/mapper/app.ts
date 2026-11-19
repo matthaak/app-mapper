@@ -31,8 +31,6 @@ const KEY = {
   /** View ▸ Theme: 'classic', or none for Modern (the default). */
   theme: 'app-mapper.theme',
   view: (location: string) => `app-mapper.view:${location}`,
-  /** A file's Review Mode, once the user set it ('1' on, '0' off). */
-  annotations: (project: string, path: string) => `app-mapper.annotations:${project}:${path}`,
   /** Show spelling errors in the editors: '0' when turned off (on by default). */
   spelling: 'app-mapper.spelling',
   /** The skill version whose update the user declined for a project (asked once per version). */
@@ -855,9 +853,6 @@ export class MapperApp {
     if (open) return open instanceof EditorWindow ? this.desk.makeKey(open.win) : this.dock.select(path);
     const doc = project.docs.get(path);
     if (!doc) return alertPanel(this.desk, 'Missing File', `${path} is no longer in the project. Remove its node, or Rescan once it’s back.`);
-    // Review Mode, as the user last set it for this file (else the editor's default).
-    const annotationsKey = KEY.annotations(project.file, path);
-    const saved = storage(annotationsKey);
     const options = {
       path,
       project: project.name,
@@ -865,11 +860,8 @@ export class MapperApp {
       user: this.user(),
       // Already under review (tracked changes or comments in it): keep tracking. Else not.
       trackChanges: hasRevisions(doc.text),
-      annotations: saved === null ? undefined : saved === '1',
-      // Remembered once set by hand; turned back on by highlighting or Track Changes, that's kept too.
-      onAnnotationsChange: (on: boolean, manual: boolean) => {
-        if (manual || storage(annotationsKey) !== null) storage(annotationsKey, on ? '1' : '0');
-      },
+      // (Purge All Completed Items asks first.)
+      confirm: async (message: string, ok: string) => (await choicePanel(this.desk, 'Purge All', message, ['Cancel', ok])) === 1,
       spellcheck: storage(KEY.spelling) !== '0',
       // One setting for every editor: the others follow.
       onSpellcheckChange: (on: boolean) => {

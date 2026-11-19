@@ -4,12 +4,13 @@
  * command, re-renders and maps the selection back — so a command does the same thing in each.
  */
 import { cleanComment, verdictOf } from './notes';
-import { continuesItem, render, type Mark, type MarkKind } from './parse';
+import { continuesItem, groupOf, render, type Mark, type MarkKind } from './parse';
 import type { MdMode } from './types';
 
 export type ActionId =
   | 'h1'
   | 'h2'
+  | 'h3'
   | 'bold'
   | 'italic'
   | 'highlight'
@@ -22,7 +23,9 @@ export type ActionId =
   | 'break'
   | 'accept'
   | 'acceptAll'
-  | 'reject';
+  | 'reject'
+  | 'purge'
+  | 'purgeAll';
 
 export interface Edit {
   md: string;
@@ -33,13 +36,17 @@ export interface Edit {
 /**
  * Applies `id` to the selection [start, end) of `md`. `note` is a note block (see notes.ts):
  * for a new highlight or comment, or the user's "Accepted" or "Rejected" for Accept and Reject.
+ * With `pendingOnly`, Accept and Reject leave completed marks the selection touches as they are
+ * (they aren't in view), and Purge has none to act on.
  */
-export function applyAction(id: ActionId, md: string, start: number, end: number, mode: MdMode, note = ''): Edit {
+export function applyAction(id: ActionId, md: string, start: number, end: number, mode: MdMode, note = '', pendingOnly = false): Edit {
   switch (id) {
     case 'h1':
       return heading(md, start, end, 1);
     case 'h2':
       return heading(md, start, end, 2);
+    case 'h3':
+      return heading(md, start, end, 3);
     case 'bold':
       return toggleInline(md, start, end, '*', 2, 'bold text', '_');
     case 'italic':
@@ -48,7 +55,7 @@ export function applyAction(id: ActionId, md: string, start: number, end: number
       // Inside a highlight or at a comment (or touching one): remove it, notes and all.
       // Otherwise highlight the selection, or with none, anchor a comment at the caret.
       const r = render(md);
-      const on = marksAt(r.marks, start, end, ['highlight', 'comment']);
+      const on = withRuns(r.marks, marksAt(r.marks, start, end, ['highlight', 'comment']));
       if (on.length) return cut(md, start, end, on.flatMap(unwrapRanges));
       return start === end ? anchor(md, r.code, start, note) : highlight(md, r.code, start, end, note);
     }
@@ -67,16 +74,24 @@ export function applyAction(id: ActionId, md: string, start: number, end: number
     case 'break':
       return replace(md, start, end, '\n', 1, 1);
     case 'accept':
-      return resolve(md, start, end, true, note);
+      return resolve(md, start, end, true, note, false, pendingOnly);
     case 'acceptAll':
       return resolve(md, start, end, true, note, true);
     case 'reject':
-      return resolve(md, start, end, false, note);
+      return resolve(md, start, end, false, note, false, pendingOnly);
+    case 'purge':
+      return pendingOnly ? { md, anchor: start, focus: end } : purge(md, start, end);
+    case 'purgeAll':
+      return purge(md, start, end, true);
   }
 }
 
 /** Tracked changes: {++additions++} and {--deletions--}. */
 export const CHANGES: readonly MarkKind[] = ['underline', 'strike'];
+/** Comments: {==highlights==} and comments anchored at a point. Accepted, they are completed too. */
+export const COMMENTS: readonly MarkKind[] = ['highlight', 'comment'];
+/** Every kind of mark. */
+export const ALL_MARKS: readonly MarkKind[] = [...CHANGES, ...COMMENTS];
 
 /**
  * The marks of `kinds` the selection touches: a caret must be strictly inside one (past its
@@ -88,6 +103,13 @@ export function marksAt(marks: readonly Mark[], start: number, end: number, kind
   return marks.filter((m) => kinds.includes(m.kind) && (start === end ? m.from <= start && start <= m.to : start < m.to && end > m.from));
 }
 
+/** `found` (of `marks`) with the rest of each one's run (see Mark.group): what acts on one acts on all. */
+export function withRuns(marks: readonly Mark[], found: readonly Mark[]): Mark[] {
+  const out = new Set<Mark>();
+  for (const m of found) for (const k of groupOf(marks, m.group ?? marks.indexOf(m))) out.add(marks[k]);
+  return marks.filter((m) => out.has(m));
+}
+
 /** The delimiters and notes of a mark: removing them leaves its text (a comment: nothing). */
 const unwrapRanges = (m: Mark): [number, number][] => [
   [m.from, m.body],
@@ -95,36 +117,96 @@ const unwrapRanges = (m: Mark): [number, number][] => [
 ];
 
 /**
- * Accepts (additions keep their text, deletions go) or rejects (additions go, deletions keep
- * their text) the changes the selection touches. A change with comments in its thread keeps its
- * history: `note` (the user's "Accepted" or "Rejected") is added to the thread instead, and the
- * views show its outcome (see Mark.verdict) — unless it already ends with that verdict. One
- * without comments (or with no `note`, nobody to sign it) is settled for good: its markup and
- * thread go, and removed text takes its spacing with it. With `all`, every change in the
- * document not yet resolved either way, wherever the selection is.
+ * Accepts or rejects the marks the selection touches: Accept, additions and deletions, and the
+ * threads of highlights and comments; Reject, additions and deletions only. The markup stays,
+ * with its history: `note` (the user's "Accepted" or "Rejected") is added to the thread — unless
+ * that is its verdict already — and the views show its outcome (see Mark.verdict): an accepted
+ * addition or rejected deletion as plain text, an accepted deletion or rejected addition not at
+ * all, an accepted highlight or comment not at all. Purge then takes the markup away. With no
+ * `note` (nobody to sign it) a change is settled for good at once, its markup and thread gone,
+ * and a highlight or comment is left as it is. With `all`, every change in the document not yet
+ * accepted or rejected, wherever the selection is. With `pendingOnly`, only marks not yet
+ * completed.
  */
-function resolve(md: string, start: number, end: number, accept: boolean, note: string, all = false): Edit {
+function resolve(md: string, start: number, end: number, accept: boolean, note: string, all = false, pendingOnly = false): Edit {
   const r = render(md);
-  const visible = shownChars(md, r.plain);
-  const goes = (m: Mark) => (m.kind === 'strike') === accept;
-  const edits: [number, number, string][] = [];
-  const marks = all ? r.marks.filter((m) => CHANGES.includes(m.kind) && !m.verdict) : marksAt(r.marks, start, end, CHANGES);
-  for (const m of marks) {
-    if (note && m.notes.some((n) => n.comment)) {
-      if (verdictOf(m.notes) === (accept ? 'accepted' : 'rejected')) continue;
-      edits.push([m.to, m.to, note]);
-    } else {
-      for (const [a, b] of goes(m) ? markRemoval(md, visible, m) : unwrapRanges(m)) edits.push([a, b, '']);
-    }
-  }
-  return splice(md, start, end, edits);
+  const kinds = accept ? ALL_MARKS : CHANGES;
+  const marks = all
+    ? r.marks.filter((m) => CHANGES.includes(m.kind) && !m.verdict)
+    : withRuns(r.marks, marksAt(r.marks, start, end, kinds)).filter((m) => !pendingOnly || !m.verdict);
+  const e = splice(md, resolutions(md, r.plain, marks, accept, note));
+  return { md: e.md, anchor: e.map(start), focus: e.map(end) };
 }
 
 /**
- * Makes `edits` ([from, to) replaced by text) at once, carrying the selection over: removals
- * that overlap merge, and an insertion inside a removal goes with it.
+ * Accepts or rejects mark `m` (and the rest of its run), as Accept or Reject does with the
+ * selection in it: `note` is the user's "Accepted" or "Rejected". `map` carries a position over.
  */
-function splice(md: string, start: number, end: number, edits: [number, number, string][]): Edit {
+export function resolveMark(md: string, m: Mark, accept: boolean, note: string): { md: string; map: (p: number) => number } {
+  const r = render(md);
+  const own = r.marks.find((x) => x.kind === m.kind && x.from === m.from);
+  if (!own || !(accept ? ALL_MARKS : CHANGES).includes(own.kind)) return { md, map: (p) => p };
+  return splice(md, resolutions(md, r.plain, withRuns(r.marks, [own]), accept, note));
+}
+
+/**
+ * A note added to mark `m`'s thread. A mark with no notes is unsigned, and its first note would
+ * say who made it: so an empty note (by no one) goes first.
+ */
+const addNote = (m: Mark, note: string): [number, number, string] => [m.to, m.to, `${m.notes.length ? '' : '{>><<}'}${note}`];
+
+/** The edits that resolve `marks` (see resolve). A run's verdict goes in its thread, its last mark's. */
+function resolutions(md: string, plain: readonly number[], marks: readonly Mark[], accept: boolean, note: string): [number, number, string][] {
+  const visible = shownChars(md, plain);
+  const goes = (m: Mark) => (m.kind === 'strike') === accept;
+  const edits: [number, number, string][] = [];
+  for (const m of marks) {
+    if (note) {
+      if (m.group !== undefined || verdictOf(m.notes) === (accept ? 'accepted' : 'rejected')) continue;
+      edits.push(addNote(m, note));
+    } else if (CHANGES.includes(m.kind)) {
+      for (const [a, b] of goes(m) ? markRemoval(md, visible, m) : unwrapRanges(m)) edits.push([a, b, '']);
+    }
+  }
+  return edits;
+}
+
+/**
+ * Purges the completed marks the selection touches (with `all`, every one in the document): each
+ * is settled for good as its verdict says — an accepted addition or rejected deletion becomes its
+ * plain text, an accepted deletion or rejected addition goes, an accepted highlight becomes its
+ * plain text, an accepted comment goes — and its thread, its history, goes with its markup.
+ */
+function purge(md: string, start: number, end: number, all = false): Edit {
+  const r = render(md);
+  const e = splice(md, purges(md, r.plain, r.marks, all ? r.marks : marksAt(r.marks, start, end, ALL_MARKS)));
+  return { md: e.md, anchor: e.map(start), focus: e.map(end) };
+}
+
+/** Purges completed mark `m` (see purge). `map` carries a position over. */
+export function purgeMark(md: string, m: Mark): { md: string; map: (p: number) => number } {
+  const r = render(md);
+  const own = r.marks.find((x) => x.kind === m.kind && x.from === m.from);
+  return own ? splice(md, purges(md, r.plain, r.marks, [own])) : { md, map: (p) => p };
+}
+
+/** The edits that purge the completed marks among `found` (of `marks`), with the rest of their runs. */
+function purges(md: string, plain: readonly number[], marks: readonly Mark[], found: readonly Mark[]): [number, number, string][] {
+  return withRuns(marks, found)
+    .filter((m) => m.verdict)
+    .flatMap((m): [number, number, string][] =>
+      CHANGES.includes(m.kind)
+        ? resolutions(md, plain, [m], m.verdict === 'accepted', '')
+        : (m.kind === 'comment' ? [[m.from, m.to] as [number, number]] : unwrapRanges(m)).map(([a, b]) => [a, b, '']),
+    );
+}
+
+/**
+ * Makes `edits` ([from, to) replaced by text) at once: removals that overlap merge, and an
+ * insertion inside a removal goes with it; lines removed from the very start leave no blank
+ * lines there. `map` carries a position over.
+ */
+function splice(md: string, edits: [number, number, string][]): { md: string; map: (p: number) => number } {
   const cuts: [number, number][] = [];
   for (const [a, b] of edits.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) {
     const last = cuts[cuts.length - 1];
@@ -142,15 +224,24 @@ function splice(md: string, start: number, end: number, edits: [number, number, 
     pos = b;
   }
   out += md.slice(pos);
+  const lead = Math.max(0, /^\n*/.exec(out)![0].length - /^\n*/.exec(md)![0].length);
   const map = (p: number) => {
     let shift = 0;
     for (const [a, b, t] of all) {
       if (p < a || (p === a && b === a)) break;
       shift += t.length - (Math.min(p, b) - a);
     }
-    return p + shift;
+    return Math.max(0, p + shift - lead);
   };
-  return { md: out, anchor: map(start), focus: map(end) };
+  return { md: out.slice(lead), map };
+}
+
+/**
+ * Takes mark `m` out, keeping its text: a highlight's delimiters and notes, or an anchored
+ * comment. `map` carries a position over.
+ */
+export function unmark(md: string, m: Mark): { md: string; map: (p: number) => number } {
+  return splice(md, (m.kind === 'comment' ? [[m.from, m.to]] : unwrapRanges(m)).map(([a, b]): [number, number, string] => [a, b, '']));
 }
 
 /**
@@ -166,7 +257,7 @@ export function commentOn(md: string, m: Mark, note: string): { md: string; map:
   let b: number;
   let put: string;
   if (own) [a, b, put] = [first.from, first.to, md.slice(first.from, first.to).trimEnd() + text.replace(/^\w+ \d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?/, '')];
-  else [a, b, put] = [m.to, m.to, note];
+  else [a, b, put] = addNote(m, note);
   const map = (p: number) => (p < a ? p : p >= b ? p + put.length - (b - a) : a + put.length);
   return { md: md.slice(0, a) + put + md.slice(b), map };
 }
@@ -416,14 +507,14 @@ const WORDCH = /[\p{L}\p{N}']/u;
 export const LINE_PREFIX = /^(?:\s*(?:#{1,6}\s+|>\s?|[*+-]\s+|\d+\.\s+))*\s*/;
 
 /**
- * Highlights the selection, one highlight per line (`{==text==}` and then `note`), each line's
- * part trimmed of spaces and, outside code, of block markers. A selection only partly in a code
+ * Highlights the selection (`{==text==}` and then `note`), trimmed of spaces and, at its ends,
+ * of block markers — one highlight, or in code one per line. A selection only partly in a code
  * span takes all of it, highlighted from outside. In code a mark needs its notes, so with no
  * `note` nothing is highlighted there.
  */
 function highlight(md: string, code: readonly [number, number][], start: number, end: number, note: string): Edit {
   const inSpan = ([f]: readonly [number, number]) => md[f - 1] === '`';
-  const segs: { a: number; b: number }[] = [];
+  const segs: { a: number; b: number; inCode: boolean }[] = [];
   for (let ls = lineStart(md, start); ls < end; ) {
     const le = lineEnd(md, ls);
     let a = Math.max(start, ls);
@@ -448,11 +539,13 @@ function highlight(md: string, code: readonly [number, number][], start: number,
         }
       }
     }
-    if (a < b && (note || !inCode)) segs.push({ a, b });
+    if (a < b && (note || !inCode)) segs.push({ a, b, inCode });
     if (le >= md.length) break;
     ls = le + 1;
   }
   if (!segs.length) return { md, anchor: start, focus: end };
+  // Out of code, one highlight over all the lines (they can't be told apart in code).
+  if (!segs.some((x) => x.inCode)) segs.splice(0, segs.length, { a: segs[0].a, b: segs[segs.length - 1].b, inCode: false });
   let out = '';
   let pos = 0;
   let selA = 0;
@@ -476,7 +569,8 @@ function anchor(md: string, code: readonly [number, number][], p: number, note: 
   if (!note) return { md, anchor: p, focus: p };
   while (p < md.length && WORDCH.test(md[p])) p++;
   const marks = render(md).marks;
-  for (let m = marks.find((x) => x.end === p || (x.kind === 'comment' && x.from === p)); m; m = marks.find((x) => x.end === p || (x.kind === 'comment' && x.from === p))) p = m.to;
+  const ends = (x: Mark) => x.end === p || (x.kind === 'comment' && x.from === p);
+  for (let m = marks.find(ends); m; m = marks.find(ends)) p = m.to;
   const ls = lineStart(md, p);
   const inCode = code.some(([f, t]) => f <= p && p <= t);
   if (!inCode) p = Math.max(p, ls + (LINE_PREFIX.exec(md.slice(ls, lineEnd(md, ls)))?.[0].length ?? 0));

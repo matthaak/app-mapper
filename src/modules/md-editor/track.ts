@@ -8,13 +8,15 @@
  *   and all, and deleting from it really deletes (an addition emptied this way goes entirely);
  * - deletions by the user that touch merge into one, so backspacing over a phrase makes one
  *   deletion (its spaces included), not one per letter;
+ * - a deletion runs on over the paragraph and line breaks inside it (so accepting it joins the
+ *   paragraphs either side);
  * - text already deleted is skipped over, and typing inside a deletion goes after it;
- * - typing inside someone else's addition splits it around the new one.
+ * - typing inside someone else's addition makes an addition inside it, theirs staying whole.
  *
  * Code is tracked too, the same way (a change there must be signed, which these always are).
  *
- * Not tracked: edits with no visible text — the paragraph and line breaks that join or split
- * blocks (in code, the line breaks that join or split its lines), or markup typed in Raw.
+ * Not tracked: edits with no visible text — a paragraph or line break joined or split by
+ * itself (in code, the line breaks that join or split its lines), or markup typed in Raw.
  */
 import { LINE_PREFIX, markRemoval, shownChars, type Edit } from './actions';
 import { makeNote } from './notes';
@@ -64,6 +66,8 @@ function context(md: string): Context {
 const authoredBy = (m: Mark, user: string) => m.notes[0]?.author === user;
 /** Whether index `i` is in a mark's text (past its notes, before its closing delimiter). */
 const inText = (m: Mark, i: number) => m.body <= i && i < m.end;
+/** Of marks inside one another, the innermost. */
+const innermost = (ms: Mark[]): Mark | undefined => ms.sort((x, y) => y.from - x.from)[0];
 
 function trackDelete(md: string, a: number, b: number, user: string, backward: boolean): Edit {
   if (a >= b) return { md, anchor: a, focus: a };
@@ -81,10 +85,11 @@ function trackDelete(md: string, a: number, b: number, user: string, backward: b
     return joinLines(md, a, b);
   }
 
+  const note = makeNote(user);
   const mine = marks.filter((m) => m.kind === 'underline' && authoredBy(m, user));
+  const changes = marks.filter((m) => m.kind === 'underline' || m.kind === 'strike');
   const deleted = marks.filter((m) => m.kind === 'strike');
   const myDeletions = deleted.filter((m) => authoredBy(m, user));
-  const note = makeNote(user);
   const rw = new Rewrite(md);
 
   // Runs of visible text (spaces too) become deletions, merging into the user's deletions they
@@ -105,19 +110,31 @@ function trackDelete(md: string, a: number, b: number, user: string, backward: b
       rw.insert(right.to, close);
     }
   };
+  // A deletion runs on over line and paragraph breaks and the block markers after them (out of
+  // code), so deleting across paragraphs makes one, which joins them when accepted.
+  const prefixEnd = (i: number) => {
+    const ls = md.lastIndexOf('\n', i - 1) + 1;
+    const le = md.indexOf('\n', ls) === -1 ? md.length : md.indexOf('\n', ls);
+    return ls + (LINE_PREFIX.exec(md.slice(ls, le))?.[0].length ?? 0);
+  };
+  const gap = (i: number) => !code[i] && !visible[i] && (md[i] === '\n' || i < prefixEnd(i));
   let run = -1;
+  let last = -1;
   for (let i = a; i < b; i++) {
-    // (A line break in code stays: a deletion can't hold one.)
-    const kind = !text(i) ? 'markup' : mine.some((m) => inText(m, i)) ? 'remove' : deleted.some((m) => inText(m, i)) ? 'skip' : 'strike';
+    // By the change the text is in (the innermost): the user's own addition really goes; a deletion stays as it is.
+    const at = text(i) ? innermost(changes.filter((m) => inText(m, i))) : undefined;
+    const kind = !text(i) ? (gap(i) ? 'gap' : 'markup') : at?.kind === 'strike' ? 'skip' : at && authoredBy(at, user) ? 'remove' : 'strike';
+    if (kind === 'gap') continue;
     if (kind === 'strike') {
       if (run < 0) run = i;
+      last = i + 1;
       continue;
     }
-    if (run >= 0) strike(run, i);
+    if (run >= 0) strike(run, last);
     run = -1;
     if (kind === 'remove') rw.remove(i, i + 1);
   }
-  if (run >= 0) strike(run, b);
+  if (run >= 0) strike(run, last);
 
   // The user's own additions left with no text go entirely, tidying the spacing they leave.
   for (const m of mine) {
@@ -160,35 +177,24 @@ function trackInsert(md: string, p: number, text: string, user: string): Edit {
   if (codeAt[p] && !note) return plain(p);
   const close = `++}${note}`;
   const addition = (s: string) => `{++${s}${close}`;
-  const wrap = (at: number, before = '', after = ''): Edit => {
-    // Each line of the text is its own addition (a line break can't be inside one).
-    const lines = text.split('\n');
-    const ins = before + lines.map((l) => (l ? addition(l) : '')).join('\n') + after;
-    const caret = at + ins.length - after.length - (lines[lines.length - 1] ? close.length : 0);
+  const wrap = (at: number): Edit => {
+    const ins = addition(text);
+    const caret = at + ins.length - close.length;
     return { md: md.slice(0, at) + ins + md.slice(at), anchor: caret, focus: caret };
   };
 
   // Typing inside a deletion goes after it.
   for (let m = marks.find((x) => x.kind === 'strike' && x.from < p && p < x.to); m; m = marks.find((x) => x.kind === 'strike' && x.from < p && p < x.to)) p = m.to;
 
-  if (text.includes('\n')) return wrap(p);
-
   // Inside, or at either end of, the user's own addition: extend it.
-  const own = marks.filter((m) => m.kind === 'underline' && authoredBy(m, user));
-  const mine = own.find((m) => m.from <= p && p <= m.to);
-  if (mine) return plain(Math.min(Math.max(p, mine.body), mine.end));
+  const mine = innermost(marks.filter((m) => m.kind === 'underline' && authoredBy(m, user) && m.from <= p && p <= m.to));
+  const other = innermost(marks.filter((m) => m.kind === 'underline' && !authoredBy(m, user) && m.body <= p && p <= m.end));
+  if (mine && !(other && other.from > mine.from)) return plain(Math.min(Math.max(p, mine.body), mine.end));
 
-  // Inside someone else's addition: before or after it at its ends, else split it around ours.
-  const other = marks.find((m) => m.kind === 'underline' && m.body <= p && p <= m.end);
-  if (other) {
-    if (p === other.body) return wrap(other.from);
-    if (p === other.end) return wrap(other.to);
-    // Its first part is signed like it (its notes stay with the last).
-    const first = other.notes[0];
-    const sign = first?.author && first.stamp ? `{>>${first.author} ${first.stamp}<<}` : '';
-    return wrap(p, `++}${sign}`, '{++');
-  }
-
+  // Inside someone else's addition: ours goes inside it, which stays whole — or, right at either
+  // end (a delimiter there, not on a line of its own), just outside it.
+  if (other && p === other.body && other.body === other.from + 3) return wrap(other.from);
+  if (other && p === other.end && other.close === other.end + 3) return wrap(other.to);
   return wrap(p);
 }
 

@@ -1,6 +1,7 @@
 /** The editor's toolbar: buttons, their glyphs and keyboard shortcuts. */
 import { h } from '../widgets';
 import type { ActionId } from './actions';
+import { PURGE_ALL_GLYPH, PURGE_GLYPH, REJECT_GLYPH } from './review';
 
 export type ToolId = ActionId | 'undo' | 'redo' | 'track' | 'spelling' | 'save';
 
@@ -32,11 +33,11 @@ export const TOOLS: Tool[][] = [
   [
     { id: 'h1', title: 'Heading 1', code: 'Digit1', alt: true, glyph: () => text('H1', 'heading') },
     { id: 'h2', title: 'Heading 2', code: 'Digit2', alt: true, glyph: () => text('H2', 'heading') },
+    { id: 'h3', title: 'Heading 3', code: 'Digit3', alt: true, glyph: () => text('H3', 'heading') },
   ],
   [
     { id: 'bold', title: 'Bold', code: 'KeyB', glyph: () => text('B', 'bold') },
     { id: 'italic', title: 'Italic', code: 'KeyI', glyph: () => text('I', 'italic') },
-    { id: 'highlight', title: 'Highlight or Comment', code: 'KeyH', shift: true, glyph: () => text('ab', 'highlight') },
     { id: 'code', title: 'Inline code', code: 'KeyE', glyph: () => svg('<path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" fill="none" stroke="#000" stroke-width="1.4"/>') },
   ],
   [
@@ -79,6 +80,7 @@ export const TOOLS: Tool[][] = [
     { id: 'break', title: 'Line break', glyph: () => svg('<path d="M13 3v6H4" fill="none" stroke="#000" stroke-width="1.4"/><path d="M6.5 5.5L3 9l3.5 3.5" fill="none" stroke="#000" stroke-width="1.4"/>') },
   ],
   [
+    { id: 'highlight', title: 'Comment', code: 'KeyH', shift: true, glyph: () => text('ab', 'highlight') },
     {
       id: 'track',
       title: 'Track changes',
@@ -100,7 +102,7 @@ export const TOOLS: Tool[][] = [
     },
     {
       id: 'accept',
-      title: 'Accept change(s)',
+      title: 'Accept',
       code: 'Enter',
       shift: true,
       glyph: () => svg('<path d="M2.5 8.5l3.5 4L13.5 3" fill="none" stroke="#000" stroke-width="1.8"/>'),
@@ -110,8 +112,10 @@ export const TOOLS: Tool[][] = [
       title: 'Reject change(s)',
       code: 'Backspace',
       shift: true,
-      glyph: () => svg('<path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="#000" stroke-width="1.8"/>'),
+      glyph: () => svg(REJECT_GLYPH.replace(/currentColor/g, '#000')),
     },
+    { id: 'purge', title: 'Purge completed item(s)', glyph: () => svg(PURGE_GLYPH.replace(/currentColor/g, '#000')) },
+    { id: 'purgeAll', title: 'Purge all completed items', glyph: () => svg(PURGE_ALL_GLYPH.replace(/currentColor/g, '#000')) },
   ],
   [
     {

@@ -82,9 +82,21 @@ export function noteOf(text: string, from: number, to: number): Note {
   return { author: m[1], stamp: m[2], time: stampTime(m[2]), timed: m[2].length > 10, comment: comment || undefined, from, to };
 }
 
-/** A comment as a note can hold it: one line, and nothing that would close its block early. */
+/**
+ * A comment as a note can hold it: one line — its line breaks written `<br>` — and nothing that
+ * would close its block early.
+ */
 export function cleanComment(comment: string): string {
-  return comment.replace(/\s+/g, ' ').replace(/<<\}/g, '<<').trim();
+  return comment
+    .replace(/<<\}/g, '<<')
+    .trim()
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/ ?\n ?/g, '<br>');
+}
+
+/** A comment as it reads: its `<br>`s as line breaks. */
+export function shownComment(comment: string): string {
+  return comment.replace(/<br\s*\/?>/gi, '\n');
 }
 
 /** Local date and time to the minute, as a note's stamp: `2026-11-18 13:55`. */
@@ -101,32 +113,73 @@ export function makeNote(author: string, comment = '', when = new Date()): strin
   return `{>>${who} ${stampOf(when)}${text ? `: ${text}` : ''}<<}`;
 }
 
-/** How a change was resolved, kept in its thread: its last comment is "Accepted" or "Rejected". */
+/** How a change was resolved, kept in its thread: a comment that is, or starts with, "Accepted" or "Rejected" (see verdictOf). */
 export type Verdict = 'accepted' | 'rejected';
 
-/** The verdict a thread ends with, if any: its last comment, any case, a final "." or "!" allowed. */
-export function verdictOf(notes: readonly { comment?: string }[]): Verdict | null {
-  const c = notes[notes.length - 1]?.comment?.trim().replace(/[.!]+$/, '').toLowerCase();
-  return c === 'accepted' || c === 'rejected' ? c : null;
+/**
+ * A comment's verdict, if it gives one: it is just "Accepted" or "Rejected" (any case, a final
+ * "." or "!" allowed), or starts with "Accepted." or "Rejected." and goes on with a comment
+ * ("Accepted. Clearer this way").
+ */
+function verdictIn(comment: string | undefined): Verdict | null {
+  const m = /^(accepted|rejected)(?:[.!]*$|\.)/i.exec(comment?.trim() ?? '');
+  return m ? (m[1].toLowerCase() as Verdict) : null;
 }
 
-/** A note's date (and time, if it has one) to show: in local time, or as written if it isn't a real date. */
+/**
+ * The verdict a thread holds, if any: its latest note that gives one (see verdictIn). Notes
+ * after it are comments on it, and don't change it; a later verdict does.
+ */
+export function verdictOf(notes: readonly { comment?: string }[]): Verdict | null {
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const v = verdictIn(notes[i].comment);
+    if (v) return v;
+  }
+  return null;
+}
+
+/** A verdict's note text, with the comment given with it, if any: "Accepted", "Rejected. Too vague". */
+export function verdictNote(verdict: Verdict, comment = ''): string {
+  const word = verdict === 'accepted' ? 'Accepted' : 'Rejected';
+  return comment.trim() ? `${word}. ${comment.trim()}` : word;
+}
+
+/** A note's date (and time, if it has one) to show, in local time: `11/18/26 13:55` — or as written, if it isn't a real date. */
 export function formatStamp(n: Pick<Note, 'stamp' | 'time' | 'timed'>): string {
   if (n.time === undefined) return n.stamp ?? '';
   const d = new Date(n.time);
-  return n.timed ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : d.toLocaleDateString(undefined, { dateStyle: 'medium' });
+  const p = (x: number) => String(x).padStart(2, '0');
+  const date = `${d.getMonth() + 1}/${d.getDate()}/${p(d.getFullYear() % 100)}`;
+  return n.timed ? `${date} ${p(d.getHours())}:${p(d.getMinutes())}` : date;
 }
 
-/** The hover card's contents: the author's note, then the replies. */
-export function noteList(notes: readonly Note[]): HTMLElement {
+/** Whether note `n` is a bare verdict — "Accepted" or "Rejected" and nothing more, so no comment to show (see verdictIn). */
+export const isVerdict = (n: { comment?: string }): boolean => /^(accepted|rejected)[.!]*$/i.test(n.comment?.trim() ?? '');
+
+/**
+ * A thread's notes: the author's note, then the replies — each author's in their colour
+ * (`colorOf`), if they have one. `lead` goes at the start of the first note's head, `after`
+ * just after that head (before its comment).
+ */
+export function noteList(
+  notes: readonly Note[],
+  colorOf: (author: string) => string | null = () => null,
+  extra: { lead?: Node[]; after?: Node | null } = {},
+): HTMLElement {
   const list = h('div', { className: 'md-notes' });
   notes.forEach((n, i) => {
     const item = h('div', { className: i ? 'md-note reply' : 'md-note' });
+    const color = colorOf(n.author);
+    if (color) item.style.setProperty('--md-note', color);
     const head = h('div', { className: 'md-note-head' });
+    if (!i && extra.lead) head.append(...extra.lead);
     if (n.author) head.append(h('span', { className: 'md-note-author', textContent: n.author }));
+    // The mark's own note, by no one: say so (as `{>><<}`, put before a verdict on an unsigned mark).
+    else if (!i) head.append(h('span', { className: 'md-review-unsigned', textContent: 'Unsigned' }));
     if (n.stamp) head.append(h('span', { className: 'md-note-time', textContent: formatStamp(n) }));
     item.append(head);
-    if (n.comment) item.append(h('div', { className: 'md-note-text', textContent: n.comment }));
+    if (!i && extra.after) item.append(extra.after);
+    if (n.comment) item.append(h('div', { className: 'md-note-text', textContent: shownComment(n.comment) }));
     list.append(item);
   });
   return list;

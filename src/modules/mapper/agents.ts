@@ -12,7 +12,7 @@ import template from './agent-skill.md.tmpl?raw';
 import { joinAbs, type Host } from './host';
 
 /** Raise whenever the template changes, so projects with an older skill are offered the update. */
-export const SKILL_VERSION = 2;
+export const SKILL_VERSION = 6;
 /** The skill, relative to the project root. */
 export const SKILL_PATH = '.claude/skills/app-mapper/SKILL.md';
 export const AGENTS_FILE = 'AGENTS.md';

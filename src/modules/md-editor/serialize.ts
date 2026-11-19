@@ -20,7 +20,7 @@ export interface Serialized {
 }
 
 export function toMarkdown(root: Element, points: readonly (DomPoint | null)[] = []): Serialized {
-  const raw = new Converter(points).blocks(root).join('\n\n');
+  const raw = new Converter(points, pieces(root)).blocks(root).join('\n\n');
   const at: (number | null)[] = points.map(() => null);
   let removed = 0;
   const md = raw.replace(SENTINELS, (ch, offset: number) => {
@@ -53,16 +53,69 @@ function wrap(d: string, inner: string): string {
 }
 
 /**
- * A review mark (`d` is `++`, `--` or `==`): `{d` + text + `d}`, then its notes. Spaces stay
- * inside, so a tracked change keeps the spaces it added or deleted; line breaks (such as a
- * trailing <br>) go outside, and a line break inside makes a mark of each line. A mark with no
- * text (bar a space, with notes) is dropped, notes and all.
+ * A piece of a review mark (`d` is `++`, `--` or `==`; see Piece): `{d` before it if it starts
+ * the mark, `d}` and the notes after it if it ends it. Spaces stay inside, so a tracked change
+ * keeps the spaces it added or deleted; line breaks at its ends (such as a trailing <br>) go
+ * outside. A mark all in one piece with no text (bar a space, with notes) is dropped, notes and all.
  */
-function markup(d: string, inner: string, notes: string): string {
-  return inner
-    .split('\n')
-    .map((l) => (hasText(l) || (notes && /[^\S\n]/.test(l)) ? `{${d}${l}${d}}${notes}` : l))
-    .join('\n');
+function markup(d: string, inner: string, p: Piece): string {
+  if (p.opens && p.closes && !hasText(inner) && !(p.notes && /[^\S\n]/.test(inner))) return inner;
+  const [, lead, core, trail] = /^(\n*)([\s\S]*?)(\n*)$/.exec(inner)!;
+  return `${lead}${p.opens ? `{${d}` : ''}${core}${p.closes ? `${d}}${p.notes}` : ''}${trail}`;
+}
+
+/**
+ * One element of a review mark. A mark the renderer drew in several (one per block it runs
+ * through) is written as one mark again — opened at its first, closed with its notes after its
+ * last — so long as no text outside it came between them; where some did, it is written as
+ * marks of its own either side, each with the mark's notes.
+ */
+interface Piece {
+  opens: boolean;
+  closes: boolean;
+  notes: string;
+}
+
+/** Each review mark element's piece (see Piece). */
+function pieces(root: Element): Map<Element, Piece> {
+  const out = new Map<Element, Piece>();
+  /** The last piece of each mark (by its `data-mark`), and whether text outside it came since. */
+  const last = new Map<string, { piece: Piece; broken: boolean }>();
+  /** Those that no text outside them has come after yet. */
+  const waiting = new Map<string, { piece: Piece; broken: boolean }>();
+  /** Each mark's notes, from its first element. */
+  const notes = new Map<string, string>();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n instanceof Text) {
+      if (!hasText(n.data)) continue;
+      for (const [id, l] of waiting) {
+        if (n.parentElement?.closest(`[data-mark="${id}"]`)) continue;
+        l.broken = true;
+        waiting.delete(id);
+      }
+      continue;
+    }
+    if (!(n instanceof Element) || !MARK_DELIMS[n.tagName]) continue;
+    const id = n.getAttribute('data-mark');
+    const own = notesOf(n);
+    if (id === null) {
+      out.set(n, { opens: true, closes: true, notes: own });
+      continue;
+    }
+    if (own && !notes.has(id)) notes.set(id, own);
+    const prev = last.get(id);
+    const piece: Piece = { opens: true, closes: true, notes: notes.get(id) ?? own };
+    if (prev && !prev.broken) {
+      prev.piece.closes = false;
+      piece.opens = false;
+    }
+    const l = { piece, broken: false };
+    last.set(id, l);
+    waiting.set(id, l);
+    out.set(n, piece);
+  }
+  return out;
 }
 
 /** Each mark element's delimiter. */
@@ -76,7 +129,10 @@ const isAnchor = (el: Element) => el.classList.contains('md-anchor');
 class Converter {
   private readonly marks = new Map<Node, { offset: number; ch: string }[]>();
 
-  constructor(points: readonly (DomPoint | null)[]) {
+  constructor(
+    points: readonly (DomPoint | null)[],
+    private readonly pieces: Map<Element, Piece>,
+  ) {
     points.forEach((p, k) => {
       if (!p) return;
       const list = this.marks.get(p.node) ?? [];
@@ -214,7 +270,7 @@ class Converter {
     if (isAnchor(n)) return notesOf(n) + this.inline(this.kids(n));
     const inner = () => this.inline(this.kids(n));
     const d = MARK_DELIMS[n.tagName];
-    if (d) return markup(d, inner(), notesOf(n));
+    if (d) return markup(d, inner(), this.piece(n));
     switch (n.tagName) {
       case 'BR':
         return '\n';
@@ -241,7 +297,7 @@ class Converter {
 
   /**
    * Literal text of a code element; <br> and line <div>s become newlines. Review marks with
-   * notes, and anchored comments, are written as they are anywhere (one mark per line).
+   * notes, and anchored comments, are written as they are anywhere.
    */
   private code(el: Node): string {
     let s = '';
@@ -259,13 +315,18 @@ class Converter {
           s += notesOf(c) + this.code(c);
         } else {
           const d = MARK_DELIMS[c.tagName];
-          const notes = notesOf(c);
+          const p = this.piece(c);
           // In code a mark needs its notes: without, it is just code.
-          s += d && notes ? markup(d, this.code(c), notes) : this.code(c);
+          s += d && p.notes ? markup(d, this.code(c), p) : this.code(c);
         }
       }
     }
     return s;
+  }
+
+  /** Element `el`'s piece of its mark (a whole mark, if it wasn't seen: see pieces). */
+  private piece(el: Element): Piece {
+    return this.pieces.get(el) ?? { opens: true, closes: true, notes: notesOf(el) };
   }
 
   private text(n: Text): string {

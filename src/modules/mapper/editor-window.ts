@@ -11,9 +11,8 @@ export interface EditorWindowOptions {
   user: string;
   /** Start with Track Changes on. */
   trackChanges: boolean;
-  /** Start with Review Mode on or off (default: on if the file has any changes or highlights). */
-  annotations?: boolean;
-  onAnnotationsChange?(on: boolean, manual: boolean): void;
+  /** Asks the user to confirm (see the MD Editor's `confirm`). */
+  confirm(message: string, ok: string): Promise<boolean>;
   /** Show spelling errors (see the MD Editor), and the user's toggling of it. */
   spellcheck: boolean;
   onSpellcheckChange(on: boolean): void;
@@ -58,8 +57,7 @@ export class EditorWindow {
       value: o.text,
       user: o.user,
       trackChanges: o.trackChanges,
-      annotations: o.annotations,
-      onAnnotationsChange: o.onAnnotationsChange,
+      confirm: o.confirm,
       spellcheck: o.spellcheck,
       onSpellcheckChange: o.onSpellcheckChange,
       onChange: (md) => o.onChange(md),
@@ -109,8 +107,7 @@ export class EditorTab {
       value: o.text,
       user: o.user,
       trackChanges: o.trackChanges,
-      annotations: o.annotations,
-      onAnnotationsChange: o.onAnnotationsChange,
+      confirm: o.confirm,
       spellcheck: o.spellcheck,
       onSpellcheckChange: o.onSpellcheckChange,
       onChange: (md) => o.onChange(md),

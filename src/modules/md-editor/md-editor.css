@@ -71,13 +71,14 @@
 .md-toolbar.detached { background: var(--nx-light); }
 .md-header { position: relative; }
 .md-header .nx-tabs { --nx-tab-selected: var(--md-paper); padding-left: var(--md-gutter); }
-/* Review Mode: at the right of the tabs' row, over the review column. */
-.md-header .md-annotations { position: absolute; right: 10px; bottom: 3px; }
+/* The view's check box (Hide Completed, Include Pending Changes): at the right of the tabs' row. */
+.md-header .md-view-option { position: absolute; right: 10px; bottom: 3px; }
+.md-header .md-view-option[hidden] { display: none; }
 
 .md-glyph { display: block; font: bold 13px/1 Helvetica, Arial, sans-serif; }
 .md-glyph.heading { font-size: 11px; letter-spacing: -0.2px; }
 .md-glyph.italic { font: italic 15px/1 Times, 'Times New Roman', serif; }
-.md-glyph.highlight { padding: 1px 2px 2px; font-size: 11px; background: var(--md-highlight); border: 1px solid var(--nx-black); }
+.md-glyph.highlight { padding: 1px 2px 2px; font-size: 11px; background: color-mix(in srgb, var(--md-change, var(--md-anchor)) 30%, #fff); border: 1px solid var(--nx-black); }
 
 /* ---- Document ---- */
 
@@ -171,10 +172,12 @@
 .md-visual pre { margin: 0 0 1em; padding: 10px 14px; overflow-x: auto; background: var(--md-code-bg); border: 1px solid #d6d6d6; font-size: 0.9em; line-height: 1.5; }
 .md-visual pre code { padding: 0; font-size: inherit; background: none; }
 .md-visual img { max-width: 100%; }
-.md-visual mark { background: var(--md-highlight); color: inherit; border-radius: 2px; }
+/* Highlights, and comments' markers, in their author's colour (set by the editor): a light shade of it. */
+.md-visual mark { background: color-mix(in srgb, var(--md-change, var(--md-anchor)) 24%, transparent); color: inherit; border-radius: 2px; }
 /* A comment anchored at a point: a slim marker there (it holds no text). */
-.md-visual .md-anchor { display: inline-block; width: 3px; height: 1.15em; margin: 0 1px; vertical-align: text-bottom; background: var(--md-anchor); border-radius: 1px; }
-.md-plain .md-visual .md-anchor { display: none; }
+.md-visual .md-anchor { display: inline-block; width: 3px; height: 1.15em; margin: 0 1px; vertical-align: text-bottom; background: var(--md-change, var(--md-anchor)); border-radius: 1px; }
+/* An accepted comment's marker: not seen, but still there to tie its box to. */
+.md-visual .md-anchor.accepted { visibility: hidden; width: 0; margin: 0; }
 /* Tracked changes: additions underlined, deletions struck, in their author's colour (set by the editor). */
 .md-visual u { color: var(--md-change, var(--md-author-1)); text-decoration: underline; text-underline-offset: 3px; }
 .md-visual del { color: var(--md-change, var(--md-author-1)); text-decoration: line-through; }
@@ -189,14 +192,26 @@
   white-space: nowrap;
   vertical-align: top;
 }
+/* A block all of whose text went with it: kept, at no height. */
+.md-visual .gone-block { height: 0; margin: 0; padding: 0; border: 0; overflow: hidden; list-style: none; }
 
-/* Review Mode off: Visual shows the text as if every open change were accepted (the editor hides
-   what they take out: .gone), without highlights; Raw shows the markup uncoloured. */
-.md-plain .md-visual :is(u, del) { color: inherit; text-decoration: none; }
-.md-plain .md-visual mark { background: none; }
-.md-plain .md-raw-layer :is(.mk-st, .mk-un) { color: inherit; text-decoration: none; }
-.md-plain .md-raw-layer .mk-hl { background: none; }
-.md-plain .md-raw-layer .mk-nc { color: inherit; }
+/* An accepted highlight: plain text (it is completed) — shown again while it, or its box, is
+   pointed at; an accepted comment's marker too, drawn at no width so the text doesn't move. */
+.md-visual mark.accepted { background: none; }
+.md-visual mark.accepted.md-hot { background: color-mix(in srgb, var(--md-change, var(--md-anchor)) 24%, transparent); }
+.md-visual .md-anchor.accepted.md-hot { visibility: visible; background: none; box-shadow: 0 0 0 1.5px var(--md-change, var(--md-anchor)); }
+
+/* Preview: read-only, as if every pending change were accepted (or, without Include Pending
+   Changes, rejected: the editor hides what they take out, .gone), with no highlights or comments. */
+.md-previewing .md-visual :is(u, del) { color: inherit; text-decoration: none; }
+.md-previewing .md-visual mark { background: none; }
+.md-previewing .md-visual .md-anchor { display: none; }
+.md-previewing .md-visual { caret-color: transparent; }
+
+/* A mark's text while it, or its box, is pointed at: shaded in its author's colour. */
+.md-visual .md-hot { background: color-mix(in srgb, var(--md-change, var(--md-anchor)) 14%, transparent); border-radius: 2px; }
+.md-visual mark.md-hot:not(.accepted) { background: color-mix(in srgb, var(--md-change, var(--md-anchor)) 42%, transparent); }
+.md-previewing .md-visual .md-hot { background: none; }
 
 /* ---- Raw: a transparent textarea over a layer that draws the same text's styling ---- */
 
@@ -243,7 +258,7 @@
 .md-raw-input::selection { background: var(--md-selection); }
 
 /* Marks: drawn behind the textarea's text, delimiters included. */
-.md-raw-layer .mk-hl { background: var(--md-highlight); border-radius: 2px; }
+.md-raw-layer .mk-hl { background: color-mix(in srgb, var(--md-change, var(--md-anchor)) 24%, transparent); border-radius: 2px; }
 .md-raw-layer .mk-st,
 .md-raw-layer .mk-un { text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .md-raw-layer .mk-st { text-decoration-line: line-through; }
@@ -258,10 +273,11 @@
 /* ---- The review column: marks' threads in grey boxes, tied to their text by dotted lines ---- */
 
 .md-review {
+  /* Boxes moving never scroll the page (the browser would hold one still on screen). */
+  overflow-anchor: none;
   grid-column: 2;
   grid-row: 1;
   position: relative;
-  z-index: 1;
   display: none;
   min-width: 0;
   min-height: 100cqh;
@@ -272,11 +288,13 @@
   font-size: 12px;
 }
 .md-reviewing > .md-review { display: block; }
-/* Over the text and the column, under the boxes (each line's bump half hidden by its box). */
+/* Over the text and the column, under the boxes (each line's bump half hidden by its box), so
+   a line runs right up to its box. */
 .md-review-lines {
   grid-column: 1 / 3;
   grid-row: 1;
   position: absolute;
+  z-index: 1;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -287,11 +305,16 @@
 .md-review-lines path { fill: none; stroke: #8c8c8c; stroke-width: 1; stroke-dasharray: 1 2; shape-rendering: crispEdges; }
 .md-review-lines circle { fill: #8c8c8c; }
 /* The line of the box under the mouse, or with its field open: black and heavier. */
-.md-review-lines :is(.hot, .lit, .active) path { stroke: #000; stroke-width: 2; stroke-dasharray: 2 2; }
-.md-review-lines :is(.hot, .lit, .active) circle { fill: #000; }
+/* A completed mark's line: only while its box (or text) is pointed at, or its box is open. */
+.md-review-lines .done:not(.hot, .lit, .active) { visibility: hidden; }
+/* The line of the box (or text) under the mouse, or with its field open: in the author's colour, heavier. */
+.md-review-lines :is(.hot, .lit, .active) path { stroke: var(--md-change, #000); stroke-width: 2; stroke-dasharray: 2 2; }
+.md-review-lines :is(.hot, .lit, .active) circle { fill: var(--md-change, #000); }
 
 .md-review-box {
+  --md-box-pad: 5px;
   position: absolute;
+  z-index: 2;
   left: 12px;
   right: 10px;
   box-sizing: border-box;
@@ -301,31 +324,109 @@
   color: var(--nx-black);
   line-height: 1.3;
 }
-/* A resolved change's box: lighter, its verdict beside its kind. */
+/* A completed mark's box: lighter, led by its verdict. */
 .md-review-box.resolved { background: #dedede; border-color: var(--nx-light); }
 .md-review-verdict { color: var(--nx-black); }
-.md-review-box.active { border-color: var(--nx-black); box-shadow: 0 0 0 1px var(--nx-black); }
-.md-review-kind { margin-bottom: 3px; font-size: 10px; font-weight: bold; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-change, var(--nx-dark)); }
-.md-review-box[data-kind='highlight'] .md-review-kind::before {
-  content: '';
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin: 0 5px 0 0;
-  vertical-align: -1px;
-  background: var(--md-highlight);
-  border: 1px solid var(--nx-dark);
-}
+/* A closed box's two lines (see summary in review.ts): each one line, cut short. */
+.md-review-line { display: flex; align-items: baseline; gap: 7px; min-width: 0; height: 1.3em; white-space: nowrap; }
+.md-review-line :is(.md-note-author, .md-note-text, .md-note-time) { color: var(--md-note, inherit); }
+.md-review-line .md-note-text { margin: 0; white-space: nowrap; }
+.md-review-snippet { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A resolved change's badges, leading its box: its verdict, then what it was ("ab" underlined or struck). */
+.md-review-badge { display: inline-flex; align-self: center; color: var(--md-change, var(--nx-black)); }
+/* The text a resolved change took out of view: "Deleted: …", "Added: …". */
+.md-review-gone { font-style: italic; color: var(--md-change, inherit); }
+div.md-review-gone { margin-top: 3px; overflow-wrap: break-word; }
+/* A comment being edited, in place: the same size as when it is read. */
+.md-note-text[contenteditable] { outline: 1px solid var(--nx-black); outline-offset: 1px; border-radius: 1px; background: #fff; cursor: text; }
+[data-theme='modern'] .md-note-text[contenteditable] { outline: 2px solid var(--m-accent-ring); outline-offset: 1px; border-radius: 3px; }
+.md-review-replies { flex: none; margin-left: auto; color: var(--nx-dark); font-size: 11px; }
+/* The open box's focus ring: a shade of its author's colour (as their highlights are). */
+.md-review-box.active { border-color: var(--nx-black); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-change, var(--md-anchor)) 30%, transparent); }
+/* Top right: a pending change's Accept and Reject, a pending comment's Accept, while its box is
+   pointed at and closed (open, it has labelled ones at its foot); a completed mark's Purge; a new
+   mark's Cancel. */
+/* Centred on the first line of text (the box's padding, then half a line, less half a button);
+   in a box of one line, on the box. */
+.md-review-tools { position: absolute; top: calc(var(--md-box-pad) + 0.65em - 9px); right: 3px; display: none; gap: 1px; background: inherit; border-radius: 3px; }
+.md-review-box.single .md-review-tools { top: 50%; transform: translateY(-50%); }
+.md-review-box:is(:hover, .active) .md-review-tools { display: flex; }
+.md-review-tool { display: none; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--nx-dark); }
+.md-review-tool:hover { background: rgba(0, 0, 0, 0.08); color: var(--nx-black); }
+.md-review-box:hover:not(.active, .resolved):is([data-kind='underline'], [data-kind='strike']) .md-review-tool:is(.accept, .reject),
+.md-review-box:hover:not(.active, .resolved, .fresh):is([data-kind='highlight'], [data-kind='comment']) .md-review-tool.accept,
+.md-review-box.resolved .md-review-tool.purge,
+.md-review-box.fresh .md-review-tool.cancel { display: inline-flex; }
+/* The open box's buttons, small, at its foot: a pending change's Accept and Reject, a pending
+   comment's Accept (not once completed: a verdict is changed in a comment, or in Source), and Cancel. */
+.md-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; margin-top: 4px; }
+.md-review-actions .nx-button { height: 20px; gap: 4px; padding: 0 6px 1px; font-size: 11px; }
+.md-review-box:not([data-kind='underline'], [data-kind='strike']) .md-review-actions .md-review-reject,
+.md-review-box.fresh .md-review-actions .md-review-accept,
+.md-review-box.resolved .md-review-actions :is(.md-review-accept, .md-review-reject) { display: none; }
 .md-review-box .md-notes { width: auto; max-width: none; gap: 5px; }
 .md-review-box .md-note.reply { margin-left: 10px; padding-top: 5px; border-top-color: var(--nx-light); }
 .md-review-foot { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
 .md-review-foot .nx-textfield { display: flex; }
+/* The comment field: one line to start, growing with its text (see ReplyField in review.ts).
+   Its edges line up with those of the last note's comment being edited — its outline reaches
+   `--md-edit-out` beyond it — indented as that note is (see alignField). */
+/* The field and its Send button at its right: square, one line of the field tall, at its foot. */
+.md-review-compose { --md-edit-out: 2px; --md-send: 22px; display: flex; align-items: flex-end; gap: 4px; margin: 0 calc(-1 * var(--md-edit-out)); }
+.md-review-input { flex: 1; min-width: 0; }
+.md-review-send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--md-send);
+  height: var(--md-send);
+  padding: 0;
+  border: 0;
+  background: var(--nx-soft);
+  box-shadow: var(--nx-raised);
+  color: var(--nx-black);
+}
+.md-review-send:active:not(:disabled) { background: var(--nx-white); }
+.md-review-send:disabled { box-shadow: var(--nx-raised-dim); color: var(--nx-dark); }
+.md-review-send:disabled svg { opacity: 0.4; }
+[data-theme='modern'] .md-review-compose { --md-edit-out: 3px; }
+[data-theme='modern'] .md-review-send { border-radius: var(--m-radius); background: var(--m-accent); box-shadow: none; color: #fff; }
+[data-theme='modern'] .md-review-send:hover:not(:disabled) { filter: brightness(1.08); }
+[data-theme='modern'] .md-review-send:disabled { background: var(--m-bar); color: var(--m-faint); box-shadow: inset 0 0 0 1px var(--m-line); }
+[data-theme='modern'] .md-review-send:disabled svg { opacity: 1; }
+.md-review-text {
+  min-height: 1.3em;
+  padding: 1px 3px;
+  border: 1px solid;
+  border-color: var(--nx-black) var(--nx-light) var(--nx-light) var(--nx-black);
+  background: var(--nx-white);
+  line-height: 1.3;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  outline: none;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.md-review-text.empty::before { content: attr(data-placeholder); color: var(--nx-dark); pointer-events: none; }
+/* Disabled (while a note is edited): no hint, and plainly so — no white, no bevel, a grey outline. */
+.md-review-input.disabled { background: none; border: 1px solid var(--nx-dark); }
+.md-review-input.disabled .md-review-text { border-color: transparent; background: none; color: var(--nx-dark); cursor: default; }
+.md-review-input.disabled .md-review-text.empty::before { visibility: hidden; }
+[data-theme='modern'] .md-review-text { padding: 4px 8px; border: none; background: none; color: var(--m-text); caret-color: var(--m-accent); }
+[data-theme='modern'] .md-review-text.empty::before { color: var(--m-faint); }
+[data-theme='modern'] .md-review-input.disabled { background: var(--m-bar); border-color: var(--m-line); }
+.md-review-foot[hidden] { display: none; }
 .md-review-who { font-size: 10px; color: var(--nx-dark); }
 
 .md-notes { display: flex; flex-direction: column; gap: 7px; width: max-content; max-width: 300px; }
 .md-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; }
 .md-note-author { font-weight: bold; }
-.md-note-time { color: var(--nx-dark); font-size: 11px; }
+/* Each note's author and comment in the author's colour (its date stays grey). */
+.md-note :is(.md-note-author, .md-note-text, .md-note-time) { color: var(--md-note, inherit); }
+.md-note-time { color: var(--md-note, var(--nx-dark)); font-size: 11px; }
+.md-review-unsigned { color: var(--nx-dark); font-style: italic; }
 .md-note-text { margin-top: 3px; line-height: 1.3; white-space: pre-wrap; overflow-wrap: break-word; }
 .md-note.reply { margin-left: 14px; padding-top: 7px; border-top: 1px solid var(--nx-light); }
 /* In the open box, any note can be edited: clicked, its comment becomes a field. */
@@ -333,10 +434,6 @@
 .md-review-box.active .md-note:not(.editing):hover { background: rgba(0, 0, 0, 0.05); }
 .md-note.editing .nx-textfield { display: flex; margin-top: 3px; }
 
-.md-prompt .nx-popover-body { width: 280px; display: flex; flex-direction: column; gap: 6px; }
-.md-prompt .nx-textfield { display: flex; }
-.md-prompt-who { font-size: 11px; }
-.md-prompt-buttons { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
 
 /* ---- Modern theme (View ▸ Theme ▸ Modern; tokens in the widgets' modern.css) ---- */
 
@@ -365,7 +462,7 @@
 [data-theme='modern'] .md-glyph { font-family: var(--m-font); }
 [data-theme='modern'] .md-glyph.italic { font: italic 600 15px/1 Georgia, 'Times New Roman', serif; }
 [data-theme='modern'] .md-glyph.highlight { border: none; border-radius: 3px; padding: 2px 3px; }
-[data-theme='modern'] .md-header .md-annotations { bottom: 6px; }
+[data-theme='modern'] .md-header .md-view-option { bottom: 6px; }
 
 /* The document: white page, a hairline by its scroller and review column. */
 /* The document scrolls with the system's own scrollbar, not the NeXT scroller. */
@@ -385,9 +482,10 @@
 [data-theme='modern'] .md-review { background: #f7f7f9; border-left: 1px solid var(--m-line); font-family: var(--m-font); }
 [data-theme='modern'] .md-review-lines path { stroke: #c4c7ce; }
 [data-theme='modern'] .md-review-lines circle { fill: #c4c7ce; }
-[data-theme='modern'] .md-review-lines :is(.hot, .lit, .active) path { stroke: var(--m-accent); stroke-width: 1.5; stroke-dasharray: 3 2; }
-[data-theme='modern'] .md-review-lines :is(.hot, .lit, .active) circle { fill: var(--m-accent); }
+[data-theme='modern'] .md-review-lines :is(.hot, .lit, .active) path { stroke: var(--md-change, var(--m-accent)); stroke-width: 1.5; stroke-dasharray: 3 2; }
+[data-theme='modern'] .md-review-lines :is(.hot, .lit, .active) circle { fill: var(--md-change, var(--m-accent)); }
 [data-theme='modern'] .md-review-box {
+  --md-box-pad: 8px;
   padding: 8px 10px 9px;
   background: var(--m-surface);
   border: 1px solid var(--m-line);
@@ -399,10 +497,11 @@
 [data-theme='modern'] .md-review-box:hover { border-color: var(--m-edge); }
 [data-theme='modern'] .md-review-box.resolved { background: #fafafb; border-color: var(--m-line); color: var(--m-muted); box-shadow: none; }
 [data-theme='modern'] .md-review-verdict { color: var(--m-text); }
-[data-theme='modern'] .md-review-box.active { border-color: var(--m-accent); box-shadow: 0 0 0 3px var(--m-accent-ring); }
-[data-theme='modern'] .md-review-kind { margin-bottom: 4px; letter-spacing: 0.05em; }
-[data-theme='modern'] .md-review-box[data-kind='highlight'] .md-review-kind::before { border: none; border-radius: 2px; }
-[data-theme='modern'] .md-review-box .md-note.reply { border-top-color: var(--m-line); }
-[data-theme='modern'] :is(.md-review-who, .md-note-time) { color: var(--m-faint); }
+[data-theme='modern'] .md-review-box.active { border-color: var(--md-change, var(--m-accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-change, var(--md-anchor)) 30%, transparent); }
+/* The open box has the focus ring; its fields don't have one of their own. */
+[data-theme='modern'] .md-review-box .nx-field:focus-within { box-shadow: none; }
+[data-theme='modern'] [data-theme='modern'] .md-review-box .md-note.reply { border-top-color: var(--m-line); }
+[data-theme='modern'] .md-review-who { color: var(--m-faint); }
+[data-theme='modern'] .md-note-time { color: var(--md-note, var(--m-faint)); }
 [data-theme='modern'] .md-note-author { font-weight: 600; }
 [data-theme='modern'] .md-note.reply { border-top-color: var(--m-line); }

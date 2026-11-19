@@ -48,6 +48,7 @@ async function start(): Promise<void> {
     onSpellcheckChange: (on) => api.setSpellcheck(on),
     onChange: () => showEdited(),
     onSave: () => void save(false),
+    confirm: async (message, ok) => (await api.confirm({ message, buttons: [ok, 'Cancel'], defaultId: 0, cancelId: 1 })) === 0,
   }).mount(document.getElementById('app')!);
 
   const edited = () => editor.value !== saved;

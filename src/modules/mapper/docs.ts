@@ -18,7 +18,7 @@
  * a link to a .md file are ignored, so the section can hold other notes too.
  *
  * Review markup from the MD Editor (CriticMarkup: {++added++}, {--deleted--}, {==highlighted==}
- * and {>>comments<<}) is read as if the changes were accepted.
+ * and {>>comments<<}) is read as if the changes were accepted, marks running over lines too.
  */
 
 export interface DocDependency {
@@ -113,9 +113,26 @@ interface Line {
   heading?: { level: number; text: string };
 }
 
-/** The file's lines outside front matter and fenced code, with headings recognized. */
+/**
+ * The file's lines as if every change were accepted: notes dropped, deleted text left out (its
+ * line breaks kept, so the lines stay where they are), marks' delimiters dropped. Marks may run
+ * over lines, so this is done over the whole file.
+ */
+function acceptedLines(md: string): string[] {
+  return md
+    .replace(/\{>>[^\n]*?<<\}/g, '')
+    .replace(/\{--([\s\S]*?)--\}/g, (_, t: string) => t.replace(/[^\n]/g, ''))
+    .replace(/\{\+\+|\+\+\}|\{==|==\}/g, '')
+    .split('\n');
+}
+
+/**
+ * The file's lines outside front matter and fenced code, with headings recognized: `all` as
+ * written, `content` read as accepted (see acceptedLines).
+ */
 function lines(md: string): { all: string[]; content: Line[] } {
   const all = md.split('\n');
+  const read = acceptedLines(md);
   const content: Line[] = [];
   let i = 0;
   // YAML front matter.
@@ -125,7 +142,7 @@ function lines(md: string): { all: string[]; content: Line[] } {
   }
   let fence: string | null = null;
   for (; i < all.length; i++) {
-    const text = all[i];
+    const text = read[i];
     const f = FENCE.exec(text);
     if (fence) {
       if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
@@ -227,7 +244,8 @@ export function addDependency(md: string, from: string, to: string, toTitle: str
   }
   const last = sec.items[sec.items.length - 1];
   if (last) {
-    const [, indent, lastMarker] = ITEM.exec(all[last.index])!;
+    // (Its line may start with a mark's delimiter: `{++- [X](x.md)`.)
+    const [, indent, lastMarker] = ITEM.exec(all[last.index].replace(/^(\s*)\{(?:\+\+|==)/, '$1')) ?? ['', '', '-'];
     const marker = lastMarker.replace(/^(\d+)([.)])$/, (_, n: string, p: string) => `${Number(n) + 1}${p}`);
     all.splice(last.index + 1, 0, indent + itemLine(marker, from, to, toTitle, label));
   } else {
